@@ -1,0 +1,13 @@
+bin/
+obj/
+/packages/
+riderModule.iml
+/_ReSharper.Caches/
+
+# Default render output
+map.png
+
+# Client data: large, and not ours to redistribute
+vanilla_client/
+/client/
+/sixlabors.lic

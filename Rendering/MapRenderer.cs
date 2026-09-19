@@ -16,7 +16,7 @@ public sealed class MapRenderer
     private readonly Rasterizer _rasterizer;
 
     private MapEffect? _effect;
-    private Matrix4x4 _worldViewProj;
+    private IsoProjection _projection;
     private bool _beginCalled;
 
     public MapRenderer(Rasterizer rasterizer)
@@ -24,14 +24,14 @@ public sealed class MapRenderer
         _rasterizer = rasterizer;
     }
 
-    public void Begin(MapEffect effect, Matrix4x4 worldViewProj)
+    public void Begin(MapEffect effect, IsoProjection projection)
     {
         if (_beginCalled)
             throw new InvalidOperationException("Mismatched Begin and End calls");
 
         _beginCalled = true;
         _effect = effect;
-        _worldViewProj = worldViewProj;
+        _projection = projection;
     }
 
     public void End()
@@ -68,25 +68,23 @@ public sealed class MapRenderer
     }
 
     /// <summary>
-    /// Port of the shared TileVSMain vertex shader, plus the viewport transform the GPU would
-    /// apply afterwards. Texture.z is added to clip-space z, which is how co-located tiles are
-    /// separated in depth without moving them on screen.
+    /// Port of the shared TileVSMain vertex shader, and of the viewport transform the GPU would
+    /// apply after it, evaluated through <see cref="IsoProjection"/> rather than the matrix
+    /// chain. See that type for why: the two are algebraically the same, but only the closed
+    /// form places a world point identically regardless of the canvas it is being drawn into,
+    /// which is what independently rendered slices need.
+    ///
+    /// Texture.z is added to depth, which is how tiles sharing a position are separated in the
+    /// depth buffer without moving on screen.
     /// </summary>
     private ScreenVertex Transform(in MapVertex vertex, Vector4 hueOverride)
     {
-        var clip = Vector4.Transform(new Vector4(vertex.Position, 1.0f), _worldViewProj);
-        clip.Z += vertex.Texture.Z;
-
-        // Orthographic projection, so w is 1; the divide is kept for correctness, not effect.
-        float invW = clip.W == 0f ? 1f : 1f / clip.W;
-        float ndcX = clip.X * invW;
-        float ndcY = clip.Y * invW;
-        float ndcZ = clip.Z * invW;
+        var position = vertex.Position;
 
         ScreenVertex result;
-        result.X = (ndcX * 0.5f + 0.5f) * _rasterizer.Width;
-        result.Y = (0.5f - ndcY * 0.5f) * _rasterizer.Height;
-        result.Z = ndcZ;
+        result.X = _projection.ScreenX(position.X, position.Y);
+        result.Y = _projection.ScreenY(position.X, position.Y, position.Z);
+        result.Z = (float)_projection.Depth(position.Z) + vertex.Texture.Z;
         result.Texture = vertex.Texture;
         result.Hue = hueOverride != default ? hueOverride : vertex.Hue;
         result.Normal = vertex.Normal;

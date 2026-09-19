@@ -3,11 +3,20 @@ using SwMapRenderer.Assets;
 
 namespace SwMapRenderer.Rendering;
 
-/// <summary>A vertex after projection and the viewport transform. X/Y are pixels, Z is [0,1] depth.</summary>
+/// <summary>
+/// A vertex after projection and the viewport transform. X/Y are canvas pixels, Z is [0,1] depth.
+///
+/// X and Y are double deliberately. Rounding them to single precision reintroduces exactly the
+/// problem <see cref="IsoProjection"/> exists to avoid: the same world point rounds differently
+/// at different canvas offsets, and at 45 degrees a discrepancy of 1e-5 px is enough to hand a
+/// whole diagonal of pixel centres to the neighbouring tile. Keeping them double makes a slice
+/// bit-for-bit a window onto the same canvas. Z needs no such care, being independent of both
+/// canvas and zoom.
+/// </summary>
 public struct ScreenVertex
 {
-    public float X;
-    public float Y;
+    public double X;
+    public double Y;
     public float Z;
     public Vector3 Texture;
     public Vector4 Hue;
@@ -59,22 +68,22 @@ public sealed class Rasterizer
 
         double invArea = 1.0 / area;
 
-        int minX = Math.Max(0, (int)MathF.Floor(Min3(v0.X, v1.X, v2.X)));
-        int maxX = Math.Min(Width - 1, (int)MathF.Ceiling(Max3(v0.X, v1.X, v2.X)));
-        int minY = Math.Max(0, (int)MathF.Floor(Min3(v0.Y, v1.Y, v2.Y)));
-        int maxY = Math.Min(Height - 1, (int)MathF.Ceiling(Max3(v0.Y, v1.Y, v2.Y)));
+        int minX = Math.Max(0, (int)Math.Floor(Min3(v0.X, v1.X, v2.X)));
+        int maxX = Math.Min(Width - 1, (int)Math.Ceiling(Max3(v0.X, v1.X, v2.X)));
+        int minY = Math.Max(0, (int)Math.Floor(Min3(v0.Y, v1.Y, v2.Y)));
+        int maxY = Math.Min(Height - 1, (int)Math.Ceiling(Max3(v0.Y, v1.Y, v2.Y)));
 
         if (minX > maxX || minY > maxY)
             return;
 
         for (int y = minY; y <= maxY; y++)
         {
-            float py = y + 0.5f;
+            double py = y + 0.5;
             int row = y * Width;
 
             for (int x = minX; x <= maxX; x++)
             {
-                float px = x + 0.5f;
+                double px = x + 0.5;
 
                 // The inside test is inclusive: a pixel centre lying exactly on an edge is
                 // covered by both adjacent triangles rather than by neither. Drawing it twice
@@ -135,11 +144,18 @@ public sealed class Rasterizer
     private static double Edge(double ax, double ay, double bx, double by, double cx, double cy) =>
         (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
 
-    private static float Min3(float a, float b, float c) => MathF.Min(a, MathF.Min(b, c));
+    private static double Min3(double a, double b, double c) => Math.Min(a, Math.Min(b, c));
 
-    private static float Max3(float a, float b, float c) => MathF.Max(a, MathF.Max(b, c));
+    private static double Max3(double a, double b, double c) => Math.Max(a, Math.Max(b, c));
 
-    /// <summary>Copies the framebuffer out as 8-bit straight RGBA.</summary>
+    /// <summary>
+    /// Copies the framebuffer out as 8-bit RGBA with straight alpha.
+    ///
+    /// The framebuffer itself is premultiplied, because that is what the blend equation this
+    /// rasterizer implements produces. PNG stores straight alpha, so the colour is divided back
+    /// out here. It only matters where alpha is neither 0 nor 1 -- translucent statics over a
+    /// transparent background -- but skipping it would render those twice as dark as intended.
+    /// </summary>
     public void CopyTo(Span<byte> rgba)
     {
         if (rgba.Length < _color.Length * 4)
@@ -149,9 +165,21 @@ public sealed class Rasterizer
         {
             var c = _color[i];
             int o = i * 4;
-            rgba[o] = ToByte(c.X);
-            rgba[o + 1] = ToByte(c.Y);
-            rgba[o + 2] = ToByte(c.Z);
+
+            if (c.W > 0f && c.W < 1f)
+            {
+                float inv = 1f / c.W;
+                rgba[o] = ToByte(c.X * inv);
+                rgba[o + 1] = ToByte(c.Y * inv);
+                rgba[o + 2] = ToByte(c.Z * inv);
+            }
+            else
+            {
+                rgba[o] = ToByte(c.X);
+                rgba[o + 1] = ToByte(c.Y);
+                rgba[o + 2] = ToByte(c.Z);
+            }
+
             rgba[o + 3] = ToByte(c.W);
         }
     }

@@ -57,16 +57,19 @@ public sealed class UoFiles : IDisposable
                 warn?.Invoke(warning);
         }
 
+        long spriteBudget = (long)options.SpriteCacheMegabytes * 1024 * 1024;
+
         var tileData = new TileDataFile(resolver.Require("tiledata.mul"), options.TileDataFormat);
-        var art = new ArtFile(resolver.Require("artidx.mul"), resolver.Require("art.mul"));
-        var texmaps = new TexmapFile(resolver.Require("texidx.mul"), resolver.Require("texmaps.mul"));
+        var art = new ArtFile(resolver.Require("artidx.mul"), resolver.Require("art.mul"), spriteBudget);
+        var texmaps = new TexmapFile(resolver.Require("texidx.mul"), resolver.Require("texmaps.mul"), spriteBudget);
         var hues = new HuesFile(resolver.Require("hues.mul"));
-        var map = new MapFile(mapPath, dimensions);
+        var map = new MapFile(mapPath, dimensions, options.CachedBlocks);
         var statics = new StaticsFile(
             resolver.Require($"staidx{index}.mul"),
             resolver.Require($"statics{index}.mul"),
             dimensions,
-            tileData);
+            tileData,
+            options.CachedBlocks);
 
         return new UoFiles(tileData, art, texmaps, hues, map, statics, dimensions);
     }

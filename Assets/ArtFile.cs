@@ -11,38 +11,53 @@ public sealed class ArtFile : IDisposable
     public const int StaticOffset = 0x4000;
     public const int LandTileSize = 44;
 
-    private readonly IndexedMulFile _file;
-    private readonly Dictionary<int, Sprite> _cache = new();
+    /// <summary>Sanity bound for decoding; unused index slots hold arbitrary bytes.</summary>
+    private const int MaxSpriteDimension = 1024;
 
-    public ArtFile(string indexPath, string dataPath)
+    private readonly IndexedMulFile _file;
+    private readonly SpriteCache _cache;
+
+    /// <summary>
+    /// Largest static sprite in the file, in pixels.
+    ///
+    /// The renderer needs this to know how far outside its own tile a static can draw, which
+    /// sets the margin on a view range. It is read from the entry headers rather than by
+    /// decoding, so the whole scan is a few bytes per entry.
+    /// </summary>
+    public int MaxStaticWidth { get; }
+    public int MaxStaticHeight { get; }
+
+    public ArtFile(string indexPath, string dataPath, long cacheBudgetBytes)
     {
         _file = new IndexedMulFile(indexPath, dataPath);
+        _cache = new SpriteCache(cacheBudgetBytes);
+
+        for (int id = StaticOffset; id < _file.Count; id++)
+        {
+            var data = _file.GetData(id);
+            if (data.Length < 8)
+                continue;
+
+            int width = BitConverter.ToUInt16(data[4..]);
+            int height = BitConverter.ToUInt16(data[6..]);
+
+            // Unused slots hold arbitrary bytes; the same sanity bound the decoder applies.
+            if (width <= 0 || width > MaxSpriteDimension || height <= 0 || height > MaxSpriteDimension)
+                continue;
+
+            if (width > MaxStaticWidth) MaxStaticWidth = width;
+            if (height > MaxStaticHeight) MaxStaticHeight = height;
+        }
     }
 
     public bool IsValidLand(ushort id) => _file.IsValid(id);
 
     public bool IsValidStatic(ushort id) => _file.IsValid(StaticOffset + id);
 
-    public Sprite GetLand(ushort id)
-    {
-        if (_cache.TryGetValue(id, out var cached))
-            return cached;
+    public Sprite GetLand(ushort id) => _cache.GetOrAdd(id, key => DecodeLand(_file.GetData(key)));
 
-        var sprite = DecodeLand(_file.GetData(id));
-        _cache[id] = sprite;
-        return sprite;
-    }
-
-    public Sprite GetStatic(ushort id)
-    {
-        int key = StaticOffset + id;
-        if (_cache.TryGetValue(key, out var cached))
-            return cached;
-
-        var sprite = DecodeStatic(_file.GetData(key));
-        _cache[key] = sprite;
-        return sprite;
-    }
+    public Sprite GetStatic(ushort id) =>
+        _cache.GetOrAdd(StaticOffset + id, key => DecodeStatic(_file.GetData(key)));
 
     /// <summary>
     /// Land art is an untagged 44x44 diamond: 22 rows widening from 2 to 44 pixels, then 22
@@ -97,7 +112,7 @@ public sealed class ArtFile : IDisposable
         int height = BitConverter.ToUInt16(data[6..]);
 
         // Guard against garbage entries; no legitimate static art exceeds these bounds.
-        if (width <= 0 || width > 1024 || height <= 0 || height > 1024)
+        if (width <= 0 || width > MaxSpriteDimension || height <= 0 || height > MaxSpriteDimension)
             return Sprite.Empty;
 
         int lookupBytes = height * 2;

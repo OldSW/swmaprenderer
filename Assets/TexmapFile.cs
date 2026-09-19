@@ -10,24 +10,18 @@ namespace SwMapRenderer.Assets;
 public sealed class TexmapFile : IDisposable
 {
     private readonly IndexedMulFile _file;
-    private readonly Dictionary<int, Sprite> _cache = new();
+    private readonly SpriteCache _cache;
 
-    public TexmapFile(string indexPath, string dataPath)
+    public TexmapFile(string indexPath, string dataPath, long cacheBudgetBytes)
     {
         _file = new IndexedMulFile(indexPath, dataPath);
+        _cache = new SpriteCache(cacheBudgetBytes);
     }
 
     public bool IsValid(ushort id) => _file.IsValid(id);
 
-    public Sprite Get(ushort id)
-    {
-        if (_cache.TryGetValue(id, out var cached))
-            return cached;
-
-        var sprite = Decode(_file.GetEntry(id), _file.GetData(id));
-        _cache[id] = sprite;
-        return sprite;
-    }
+    public Sprite Get(ushort id) =>
+        _cache.GetOrAdd(id, key => Decode(_file.GetEntry(key), _file.GetData(key)));
 
     private static Sprite Decode(MulIndexEntry entry, ReadOnlySpan<byte> data)
     {

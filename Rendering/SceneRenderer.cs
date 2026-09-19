@@ -6,10 +6,7 @@ using static SwMapRenderer.Constants;
 namespace SwMapRenderer.Rendering;
 
 public readonly record struct RenderStats(
-    int MinTileX,
-    int MinTileY,
-    int MaxTileX,
-    int MaxTileY,
+    TileRhombus Range,
     int LandDrawn,
     int StaticsDrawn,
     TimeSpan Elapsed);
@@ -23,65 +20,91 @@ public sealed class SceneRenderer
 {
     private readonly MapScene _scene;
     private readonly RenderOptions _options;
-    private readonly Camera _camera = new();
     private readonly Rasterizer _rasterizer;
     private readonly MapRenderer _renderer;
     private readonly MapEffect _effect;
 
     public Rasterizer Output => _rasterizer;
 
-    public SceneRenderer(MapScene scene)
+    /// <param name="width">Canvas width. Defaults to the configured output width.</param>
+    /// <param name="height">Canvas height. Defaults to the configured output height.</param>
+    public SceneRenderer(MapScene scene, int? width = null, int? height = null)
     {
         _scene = scene;
         _options = scene.Options;
 
-        _rasterizer = new Rasterizer(_options.Width, _options.Height);
+        _rasterizer = new Rasterizer(width ?? _options.Width, height ?? _options.Height);
         _renderer = new MapRenderer(_rasterizer);
         _effect = new MapEffect(scene.Files.Hues);
-
-        _camera.ScreenWidth = _options.Width;
-        _camera.ScreenHeight = _options.Height;
-        _camera.Zoom = _options.Zoom;
-        _camera.Position = new Vector3(_options.X * TILE_SIZE, _options.Y * TILE_SIZE, 128 * 6);
-        _camera.Update();
     }
 
-    public RenderStats Render()
+    /// <summary>The projection that centres this canvas on the configured tile.</summary>
+    public IsoProjection CentredProjection => IsoProjection.Centred(
+        _options.X * TILE_SIZE, _options.Y * TILE_SIZE, _options.Zoom, _rasterizer.Width, _rasterizer.Height);
+
+    /// <summary>
+    /// Draws one canvas. The renderer is reusable: the framebuffer is cleared each time, so a
+    /// single instance can render slice after slice without reallocating it.
+    /// </summary>
+    public RenderStats Render(IsoProjection projection)
     {
         var stopwatch = Stopwatch.StartNew();
 
-        var (minX, minY, maxX, maxY) = CalculateViewRange();
+        var range = CalculateViewRange(projection);
 
-        // Opaque black, matching the reference's Clear(Color.Black).
-        _rasterizer.Clear(new Vector4(0f, 0f, 0f, 1f));
+        _rasterizer.Clear(_options.BackgroundColor);
 
-        int landDrawn = DrawLand(minX, minY, maxX, maxY);
-        int staticsDrawn = DrawStatics(minX, minY, maxX, maxY);
+        int landDrawn = DrawLand(range, projection);
+        int staticsDrawn = DrawStatics(range, projection);
 
         stopwatch.Stop();
-        return new RenderStats(minX, minY, maxX, maxY, landDrawn, staticsDrawn, stopwatch.Elapsed);
+        return new RenderStats(range, landDrawn, staticsDrawn, stopwatch.Elapsed);
     }
 
-    private int DrawLand(int minX, int minY, int maxX, int maxY)
+    private int DrawLand(TileRhombus range, IsoProjection projection)
     {
         if (!_options.ShowLand)
             return 0;
 
         int drawn = 0;
         _effect.CurrentTechnique = Technique.Terrain;
-        _renderer.Begin(_effect, _camera.WorldViewProj);
+        _renderer.Begin(_effect, projection);
 
-        for (int x = minX; x <= maxX; x++)
+        var map = _scene.Files.Map;
+        foreach (var (x, y) in range.Iterate(map.Width, map.Height))
         {
-            for (int y = minY; y <= maxY; y++)
+            if (!_scene.TryGetLandTile(x, y, out var tile) || tile == null)
+                continue;
+
+            if (!_scene.CanDrawLand(tile))
+                continue;
+
+            _renderer.DrawMapObject(_scene.CreateLand(tile), default);
+            drawn++;
+        }
+
+        _renderer.End();
+        return drawn;
+    }
+
+    private int DrawStatics(TileRhombus range, IsoProjection projection)
+    {
+        if (!_options.ShowStatics)
+            return 0;
+
+        int drawn = 0;
+        _effect.CurrentTechnique = Technique.Statics;
+        _renderer.Begin(_effect, projection);
+
+        var map = _scene.Files.Map;
+        foreach (var (x, y) in range.Iterate(map.Width, map.Height))
+        {
+            foreach (var tile in _scene.Files.Statics.Get(x, y))
             {
-                if (!_scene.TryGetLandTile(x, y, out var tile) || tile == null)
+                if (!_scene.CanDrawStatic(tile))
                     continue;
 
-                if (!_scene.CanDrawLand(tile))
-                    continue;
-
-                _renderer.DrawMapObject(_scene.CreateLand(tile), default);
+                _renderer.DrawMapObject(_scene.CreateStatic(tile), default);
                 drawn++;
             }
         }
@@ -90,56 +113,23 @@ public sealed class SceneRenderer
         return drawn;
     }
 
-    private int DrawStatics(int minX, int minY, int maxX, int maxY)
-    {
-        if (!_options.ShowStatics)
-            return 0;
-
-        int drawn = 0;
-        _effect.CurrentTechnique = Technique.Statics;
-        _renderer.Begin(_effect, _camera.WorldViewProj);
-
-        for (int x = minX; x <= maxX; x++)
-        {
-            for (int y = minY; y <= maxY; y++)
-            {
-                foreach (var tile in _scene.Files.Statics.Get(x, y))
-                {
-                    if (!_scene.CanDrawStatic(tile))
-                        continue;
-
-                    _renderer.DrawMapObject(_scene.CreateStatic(tile), default);
-                    drawn++;
-                }
-            }
-        }
-
-        _renderer.End();
-        return drawn;
-    }
-
     /// <summary>
-    /// Ported from CentrED's CalculateViewRange. The view is a diamond in tile space, so the
-    /// range is derived from the screen's combined extent rather than its width and height
-    /// separately. The eight extra rows on each side cover tiles whose geometry reaches into
-    /// frame from outside it: terrain at low z, and tall statics at high z.
+    /// The tiles that can reach this canvas.
+    ///
+    /// CentrED derives its range from a heuristic -- a diamond of (width + height) / zoom / 2.6
+    /// pixels plus eight tiles of slack -- which is sized for an interactive window, where a
+    /// tile appearing a frame late as you scroll goes unnoticed. Slices rendered independently
+    /// have no such tolerance: anything the range misses along a shared edge shows up as a hard
+    /// discontinuity between neighbours. So the range is inverted from the projection instead,
+    /// over the configured z range and the largest sprite in art.mul.
     /// </summary>
-    private (int MinX, int MinY, int MaxX, int MaxY) CalculateViewRange()
+    private TileRhombus CalculateViewRange(IsoProjection projection)
     {
-        float zoom = _camera.Zoom;
+        var art = _scene.Files.Art;
 
-        // 2.0 is the geometric figure; the reference settled on 2.6, which trims the range
-        // without anything visibly dropping out.
-        float screenDiamondDiagonal = (_camera.ScreenWidth + _camera.ScreenHeight) / zoom / 2.6f;
-
-        Vector3 center = _camera.Position;
-        var map = _scene.Files.Map;
-
-        int minTileX = map.ClampX((int)((center.X - screenDiamondDiagonal) / TILE_SIZE - 8));
-        int minTileY = map.ClampY((int)((center.Y - screenDiamondDiagonal) / TILE_SIZE - 8));
-        int maxTileX = map.ClampX((int)((center.X + screenDiamondDiagonal) / TILE_SIZE + 8));
-        int maxTileY = map.ClampY((int)((center.Y + screenDiamondDiagonal) / TILE_SIZE + 8));
-
-        return (minTileX, minTileY, maxTileX, maxTileY);
+        return projection.VisibleTiles(
+            0, 0, _rasterizer.Width, _rasterizer.Height,
+            _options.MinZ, _options.MaxZ,
+            art.MaxStaticWidth, art.MaxStaticHeight);
     }
 }

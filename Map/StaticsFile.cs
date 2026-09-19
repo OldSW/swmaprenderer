@@ -14,15 +14,17 @@ public sealed class StaticsFile : IDisposable
     private readonly IndexedMulFile _file;
     private readonly TileDataFile _tileData;
     private readonly MapDimensions _dimensions;
-    private readonly Dictionary<int, List<StaticTile>[]> _blocks = new();
+    private readonly BlockCache<List<StaticTile>[]> _blocks;
 
     private static readonly List<StaticTile> EmptyCell = [];
 
-    public StaticsFile(string indexPath, string dataPath, MapDimensions dimensions, TileDataFile tileData)
+    public StaticsFile(string indexPath, string dataPath, MapDimensions dimensions, TileDataFile tileData,
+        int cachedBlocks)
     {
         _file = new IndexedMulFile(indexPath, dataPath);
         _dimensions = dimensions;
         _tileData = tileData;
+        _blocks = new BlockCache<List<StaticTile>[]>(cachedBlocks);
     }
 
     /// <summary>
@@ -37,11 +39,13 @@ public sealed class StaticsFile : IDisposable
         return block[(y & 7) * 8 + (x & 7)] ?? EmptyCell;
     }
 
-    private List<StaticTile>[] GetBlock(int bx, int by)
+    private List<StaticTile>[] GetBlock(int bx, int by) =>
+        _blocks.GetOrAdd(bx * _dimensions.BlockHeight + by, DecodeBlock);
+
+    private List<StaticTile>[] DecodeBlock(int index)
     {
-        int index = bx * _dimensions.BlockHeight + by;
-        if (_blocks.TryGetValue(index, out var cached))
-            return cached;
+        int bx = index / _dimensions.BlockHeight;
+        int by = index % _dimensions.BlockHeight;
 
         var cells = new List<StaticTile>[64];
         var span = _file.GetData(index);
@@ -63,7 +67,6 @@ public sealed class StaticsFile : IDisposable
         }
 
         SortCells(cells);
-        _blocks[index] = cells;
         return cells;
     }
 

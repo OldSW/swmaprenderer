@@ -29,4 +29,9 @@
         </None>
     </ItemGroup>
 
+    <ItemGroup>
+      <Folder Include="web\" />
+      <Folder Include="web\map1\" />
+    </ItemGroup>
+
 </Project>

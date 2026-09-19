@@ -5,6 +5,7 @@ using SwMapRenderer;
 using SwMapRenderer.Assets;
 using SwMapRenderer.Map;
 using SwMapRenderer.Rendering;
+using SwMapRenderer.Tiling;
 
 if (CommandLine.WantsHelp(args))
 {
@@ -29,27 +30,11 @@ try
         Console.WriteLine($"Centre      : {options.X},{options.Y}  zoom {options.Zoom:0.##}");
     }
 
-    if (!files.Map.IsValidX(options.X) || !files.Map.IsValidY(options.Y))
-    {
-        Warn($"Centre tile {options.X},{options.Y} lies outside map{options.Map} " +
-             $"({files.Dimensions.Width}x{files.Dimensions.Height}); the view will be mostly empty.");
-    }
-
     var scene = new MapScene(files, options);
-    var renderer = new SceneRenderer(scene);
-    var stats = renderer.Render();
 
-    Save(renderer.Output, options.Output);
-
-    if (options.Verbose)
-    {
-        Console.WriteLine($"View range  : {stats.MinTileX},{stats.MinTileY} .. {stats.MaxTileX},{stats.MaxTileY}");
-        Console.WriteLine($"Drawn       : {stats.LandDrawn} land, {stats.StaticsDrawn} statics");
-        Console.WriteLine($"Render time : {stats.Elapsed.TotalMilliseconds:0} ms");
-    }
-
-    Console.WriteLine($"Wrote {options.Width}x{options.Height} image to {Path.GetFullPath(options.Output)}");
-    return 0;
+    return options.IsTiling
+        ? RunTiling(scene, options)
+        : RunSingleImage(scene, options, files);
 }
 catch (OptionsException e)
 {
@@ -70,6 +55,92 @@ catch (Exception e) when (e is InvalidDataException or DirectoryNotFoundExceptio
     return 4;
 }
 
+static int RunSingleImage(MapScene scene, RenderOptions options, UoFiles files)
+{
+    if (!files.Map.IsValidX(options.X) || !files.Map.IsValidY(options.Y))
+    {
+        Warn($"Centre tile {options.X},{options.Y} lies outside map{options.Map} " +
+             $"({files.Dimensions.Width}x{files.Dimensions.Height}); the view will be mostly empty.");
+    }
+
+    var renderer = new SceneRenderer(scene);
+    var stats = renderer.Render(renderer.CentredProjection);
+
+    Save(renderer.Output, options.Output);
+
+    if (options.Verbose)
+    {
+        Console.WriteLine($"View range  : {stats.Range.ApproximateCount} tiles " +
+                          $"(A {stats.Range.AMin}..{stats.Range.AMax}, B {stats.Range.BMin}..{stats.Range.BMax})");
+        Console.WriteLine($"Drawn       : {stats.LandDrawn} land, {stats.StaticsDrawn} statics");
+        Console.WriteLine($"Render time : {stats.Elapsed.TotalMilliseconds:0} ms");
+    }
+
+    Console.WriteLine($"Wrote {options.Width}x{options.Height} image to {Path.GetFullPath(options.Output)}");
+    return 0;
+}
+
+static int RunTiling(MapScene scene, RenderOptions options)
+{
+    var files = scene.Files;
+    var grid = new SliceGrid(
+        files.Dimensions, options.SliceTiles, options.Zoom,
+        files.Art.MaxStaticWidth, files.Art.MaxStaticHeight);
+
+    string directory = Path.GetFullPath(options.Tiles!);
+    var generator = new PyramidGenerator(scene, grid, directory);
+    var plan = generator.Plan();
+
+    Console.WriteLine($"Facet       : map{options.Map} ({grid.Map.Width}x{grid.Map.Height} tiles)");
+    Console.WriteLine($"Canvas      : {grid.CanvasWidth}x{grid.CanvasHeight} px at {options.Zoom:0.##}x " +
+                      $"({grid.SliceSize}px slices of {grid.TilesPerSlice}x{grid.TilesPerSlice} tiles)");
+    Console.WriteLine($"Region      : tiles {plan.Region.X0},{plan.Region.Y0} .. {plan.Region.X1},{plan.Region.Y1}");
+    Console.WriteLine($"Levels      : {plan.MinZoom}..{plan.MaxZoom} of 0..{grid.MaxZoom} " +
+                      $"(level {plan.MaxZoom} is {grid.TilePixelsAtLevel(plan.MaxZoom):0.##}px per tile)");
+    Console.WriteLine($"Slices      : {plan.NativeSliceCount:N0} to render, {plan.TotalSliceCount:N0} in total");
+
+    // Order of magnitude, from measured constants. Cost follows the slice's pixel area rather
+    // than the slice count: --max-zoom changes how many slices there are, while --zoom changes
+    // how big each one is, and both need to move the number.
+    int threads = options.Threads > 0 ? options.Threads : Environment.ProcessorCount;
+    Console.WriteLine($"Rough cost  : ~{Format(plan.Estimate(threads))} on {threads} threads, " +
+                      $"~{FormatSize(plan.TotalSliceCount * plan.MegabytesPerSlice)} on disk");
+
+    if (plan.MaxZoomWasCapped)
+    {
+        Warn($"--max-zoom {options.MaxZoom} is deeper than this grid goes; using {plan.MaxZoom}. " +
+             $"The number of levels follows --slice-tiles, not --zoom. To render finer than " +
+             $"{grid.TilePixelsAtLevel(plan.MaxZoom):0.##}px per tile, raise --zoom.");
+    }
+
+    if (options.DryRun)
+    {
+        Console.WriteLine();
+        Console.WriteLine("Dry run; nothing written. Narrow it with --region, or cap --max-zoom.");
+        return 0;
+    }
+
+    Directory.CreateDirectory(directory);
+
+    var result = generator.Generate(options.Verbose ? Console.WriteLine : null);
+    string page = LeafletViewer.Write(grid, plan, options.Map, directory);
+
+    Console.WriteLine();
+    Console.WriteLine($"Rendered {result.Rendered:N0} slices, downsampled {result.Downsampled:N0}, " +
+                      $"skipped {result.SkippedEmpty:N0} empty and {result.SkippedExisting:N0} already present " +
+                      $"in {Format(result.Elapsed)}.");
+    Console.WriteLine($"Open {page}");
+    return 0;
+}
+
+static string FormatSize(double megabytes) =>
+    megabytes >= 1024 ? $"{megabytes / 1024:N1} GB" : $"{megabytes:N0} MB";
+
+static string Format(TimeSpan span) =>
+    span.TotalHours >= 1 ? $"{span.TotalHours:0.#}h" :
+    span.TotalMinutes >= 1 ? $"{span.TotalMinutes:0.#}m" :
+    $"{span.TotalSeconds:0.#}s";
+
 static RenderOptions LoadOptions(string[] args)
 {
     var configuration = new ConfigurationBuilder()
@@ -79,7 +150,17 @@ static RenderOptions LoadOptions(string[] args)
         .AddCommandLine(CommandLine.Normalize(args), CommandLine.SwitchMappings)
         .Build();
 
-    return configuration.GetSection("Render").Get<RenderOptions>() ?? new RenderOptions();
+    try
+    {
+        return configuration.GetSection("Render").Get<RenderOptions>() ?? new RenderOptions();
+    }
+    catch (InvalidOperationException e)
+    {
+        // The binder reports an unparseable value by throwing, and its message names the
+        // configuration path rather than the switch the user actually typed. Numbers are
+        // parsed invariantly, so "0,5" is the common way to land here.
+        throw new OptionsException([CommandLine.DescribeBindingFailure(e, configuration)]);
+    }
 }
 
 static void Save(Rasterizer rasterizer, string path)

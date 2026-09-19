@@ -15,17 +15,18 @@ public sealed class MapFile : IDisposable
     private const int BlockSize = 4 + 64 * CellSize;
 
     private readonly DataFile _data;
-    private readonly Dictionary<int, LandTile[]> _blocks = new();
+    private readonly BlockCache<LandTile[]> _blocks;
 
     public MapDimensions Dimensions { get; }
 
     public int Width => Dimensions.Width;
     public int Height => Dimensions.Height;
 
-    public MapFile(string path, MapDimensions dimensions)
+    public MapFile(string path, MapDimensions dimensions, int cachedBlocks)
     {
         _data = new DataFile(path);
         Dimensions = dimensions;
+        _blocks = new BlockCache<LandTile[]>(cachedBlocks);
     }
 
     public bool IsValidX(int x) => x >= 0 && x < Width;
@@ -57,32 +58,27 @@ public sealed class MapFile : IDisposable
         return true;
     }
 
-    private LandTile[] GetBlock(int bx, int by)
+    private LandTile[] GetBlock(int bx, int by) =>
+        _blocks.GetOrAdd(bx * Dimensions.BlockHeight + by, DecodeBlock);
+
+    private LandTile[] DecodeBlock(int index)
     {
-        int index = bx * Dimensions.BlockHeight + by;
-        if (_blocks.TryGetValue(index, out var cached))
-            return cached;
-
         var span = _data.Span((long)index * BlockSize, BlockSize);
-        LandTile[] tiles;
-
         if (span.IsEmpty)
+            return [];
+
+        int bx = index / Dimensions.BlockHeight;
+        int by = index % Dimensions.BlockHeight;
+
+        var tiles = new LandTile[64];
+        for (int i = 0; i < 64; i++)
         {
-            tiles = [];
-        }
-        else
-        {
-            tiles = new LandTile[64];
-            for (int i = 0; i < 64; i++)
-            {
-                int offset = 4 + i * CellSize;
-                ushort id = BitConverter.ToUInt16(span[offset..]);
-                sbyte z = (sbyte)span[offset + 2];
-                tiles[i] = new LandTile(id, (ushort)(bx * 8 + (i & 7)), (ushort)(by * 8 + (i >> 3)), z);
-            }
+            int offset = 4 + i * CellSize;
+            ushort id = BitConverter.ToUInt16(span[offset..]);
+            sbyte z = (sbyte)span[offset + 2];
+            tiles[i] = new LandTile(id, (ushort)(bx * 8 + (i & 7)), (ushort)(by * 8 + (i >> 3)), z);
         }
 
-        _blocks[index] = tiles;
         return tiles;
     }
 

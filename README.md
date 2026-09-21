@@ -188,6 +188,98 @@ Two things the format cannot tell the renderer:
   exported with their position inside the container's gump rather than a world position, and
   those land in a heap near tile 0,0. Filtering them out belongs in the export.
 
+## Mobiles
+
+`--mobiles <file>` adds the shard's creatures and people. Nothing alive is in the client files,
+so this is the difference between a town and an empty stage set.
+
+```
+swmaprenderer --map 1 --mobiles mobiles.json --x 5531 --y 1292 -z 2 -o crowd.png
+```
+
+As with `--items`, `appsettings.json` can carry the path under `Render:Mobiles`, and
+`--mobiles ""` switches it off for a single run. The file names no facet either.
+
+```json
+[
+  { "body": 400, "hue": 33771, "direction": 2, "female": false,
+    "position": { "x": 3655, "y": 2644, "z": 0 },
+    "equipment": [
+      { "itemId": 5397, "hue": 1624, "layerId": 20 },
+      { "itemId": 5914, "hue": 1890, "layerId": 6 }
+    ] }
+]
+```
+
+`body` is an animation body id, not an art index — mobiles come from `anim.mul` rather than
+`art.mul`, and `hue` is applied the same way an item's is. `direction` is the facing on the
+wire, 0-7 clockwise from north. `equipment` is optional and only means anything on a human
+body; `layerId` is the layer the piece is worn on, and `itemId` is the world graphic, whose
+`tiledata.mul` entry names the animation that draws it worn.
+
+Each mobile is drawn the way the client draws one standing still: the **first frame of its
+idle action**, facing where the export says, with its equipment stacked over it.
+
+Getting from a body id to a frame takes four of the client's text files, all of which must be
+in the data folder alongside `anim.idx`/`anim.mul`:
+
+| File | Question it answers |
+| --- | --- |
+| `mobtypes.txt` | Is this a monster, an animal or a human? Which decides where "standing" sits in its action list — action 1, 2 and 4 respectively |
+| `body.def` | This body was never drawn; which one should stand in for it, and in what colour? |
+| `bodyconv.def` | Which of `anim.mul` … `anim5.mul` is it in, and under what number there? |
+| `equipconv.def` | This body has no art for that item; which piece should it wear instead? |
+
+Only `anim.idx`/`anim.mul` are required. `anim2`-`anim5` were added by later expansions, and a
+data folder without one simply has no bodies that need it; without any of them `--mobiles` warns
+and draws nothing.
+
+### How a mobile is placed
+
+An `anim.mul` frame is not anchored like a static. A static's art hangs from the bottom corner
+of its tile; a frame carries a reference point of its own, and the client subtracts that, having
+first moved half a tile up the screen — a mobile stands in the *middle* of its tile rather than
+at the corner.
+
+Both offsets are applied by moving the sprite's geometry through the world rather than on the
+screen. Stepping the same distance along `+x` and `-x` slides a sprite sideways without moving
+it up or down or changing its depth; the vertical anchor goes into `z`, where one unit is one
+pixel up the screen. Within one mobile the frames then step towards the camera a fraction each,
+which is what makes a hat cover the head and a mobile stand in front of the floor it is on.
+
+**A mobile is a flat billboard, and a static is not.** A static is two quads meeting at its
+tile's centre line, one receding along `-x` and one along `-y`, so that a wall interleaves with
+the scenery around it. The price is that its depth falls away by half a sprite towards either
+edge:
+
+```
+wz(x, y) = groundZ + (screen row) - |x - spriteCentreX|
+```
+
+Drawing one sprite that way is fine. Stacking a dozen is not. Every frame of a dressed body is
+a different width with its own anchor, so that last term differs per layer — by tens of world
+units, swamping the bias that is supposed to order them — and the naked body wins the depth
+test through whatever it is wearing. Flat, the term is gone: every layer of a mobile has the
+same depth at the same pixel, the height of that screen row above the ground, and the paint
+order is decided by the layer bias alone.
+
+The trade is that a mobile no longer recedes towards its own edges, so it sits a little further
+forward against scenery on neighbouring tiles than a static of the same size would. That reads
+better than the alternative: a creature shredded by its own depth wedge.
+
+### Layer order
+
+Equipment is a painter's algorithm, so the order *is* the result: get it wrong and the shirt
+covers the breastplate over it. There is no rule to derive it from. The client carries a table,
+picks between three variants on what is worn, then shuffles individual layers for a handful of
+graphics whose art was drawn out of order — and moves the cloak by facing, since a cloak hangs
+behind someone walking towards you and in front of someone walking away. `PaperdollOrder` is a
+port of ClassicUO's table and rules.
+
+One thing the client does that this does not: it culls layers an occluder is expected to hide
+completely, on top of the paint order, because some art paints outside the bounds of the item
+meant to cover it. Without that a boot or a legging occasionally peeks out from under a robe.
+
 ## Image formats
 
 `--format` picks the encoder: `png`, `jpg`, `gif`, `webp` or `webp-lossless`. A single image
@@ -269,9 +361,9 @@ size the height is trusted and the width re-derived — `vanilla_client`'s `map0
 
 | Path | Contents |
 | --- | --- |
-| `Assets/` | `.mul` readers: tiledata, art, texmaps, hues, multis, plus the memory-mapped file and index primitives |
-| `Map/` | Terrain and statics layers, the shard-item overlay, facet dimensions, and `MapScene` — the data and visibility rules the geometry is built against |
-| `Rendering/` | The port: `IsoProjection`, `LandObject`, `StaticObject`, `MapRenderer`, `MapEffect`, `Rasterizer` |
+| `Assets/` | `.mul` readers: tiledata, art, texmaps, hues, multis, animations and the body tables, plus the memory-mapped file and index primitives |
+| `Map/` | Terrain and statics layers, the shard item and mobile overlays, equipment layer order, facet dimensions, and `MapScene` — the data and visibility rules the geometry is built against |
+| `Rendering/` | The port: `IsoProjection`, `LandObject`, `StaticObject`, `MobileObject`, `MapRenderer`, `MapEffect`, `Rasterizer` |
 | `Tiling/` | `SliceGrid` (canvas geometry), `PyramidGenerator`, `LeafletViewer` |
 
 `MapScene` replaces CentrED's `CEDGame.MapManager` singleton, which the geometry code reaches

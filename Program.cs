@@ -41,6 +41,17 @@ try
                               (s.OffMap + s.Unresolved > 0 ? $", {s.OffMap + s.Unresolved:N0} skipped" : string.Empty));
         }
 
+        if (files.Mobiles is { } mobiles)
+        {
+            var m = mobiles.Stats;
+            Console.WriteLine($"Mobiles     : {m.Mobiles:N0} from {Path.GetFullPath(options.Mobiles!)} " +
+                              $"-> {m.Drawn:N0} drawn as {m.Sprites:N0} frames" +
+                              (m.Dressed > 0 ? $" ({m.Dressed:N0} dressed)" : string.Empty) +
+                              (m.OffMap + m.Unresolved > 0
+                                  ? $", {m.OffMap + m.Unresolved:N0} skipped"
+                                  : string.Empty));
+        }
+
         Console.WriteLine($"Centre      : {options.X},{options.Y}  zoom {options.Zoom:0.##}");
     }
 
@@ -86,7 +97,8 @@ static int RunSingleImage(MapScene scene, RenderOptions options, UoFiles files)
     {
         Console.WriteLine($"View range  : {stats.Range.ApproximateCount} tiles " +
                           $"(A {stats.Range.AMin}..{stats.Range.AMax}, B {stats.Range.BMin}..{stats.Range.BMax})");
-        Console.WriteLine($"Drawn       : {stats.LandDrawn} land, {stats.StaticsDrawn} statics");
+        Console.WriteLine($"Drawn       : {stats.LandDrawn} land, {stats.StaticsDrawn} statics" +
+                          (stats.MobilesDrawn > 0 ? $", {stats.MobilesDrawn} mobiles" : string.Empty));
         Console.WriteLine($"Render time : {stats.Elapsed.TotalMilliseconds:0} ms");
     }
 

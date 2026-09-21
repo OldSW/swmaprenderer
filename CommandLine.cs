@@ -33,6 +33,7 @@ public static class CommandLine
         ["--map-height"] = "Render:MapHeight",
         ["--tiledata-format"] = "Render:TileDataFormat",
         ["--items"] = "Render:Items",
+        ["--mobiles"] = "Render:Mobiles",
         ["--background"] = "Render:Background",
         ["-b"] = "Render:Background",
         ["--format"] = "Render:Format",
@@ -215,6 +216,8 @@ public static class CommandLine
                                   included. It names no facet, so it is placed on
                                   whichever --map is being rendered.
                                   Pass "" to switch off a path set in appsettings.json
+              --mobiles <file>    JSON export of a shard's mobiles, drawn standing
+                                  still from anim.mul with whatever they are wearing
           -b, --background <c>    transparent | black | white | #RRGGBB[AA]
 
               --[no-]land         Draw terrain (default: on)

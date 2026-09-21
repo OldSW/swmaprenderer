@@ -4,7 +4,9 @@ namespace SwMapRenderer.Assets;
 
 /// <summary>
 /// Opens and owns every client file a render needs. Stands in for CentrED's UOFileManager,
-/// minus the pieces that only matter to an interactive editor (gumps, animations, sounds).
+/// minus the pieces that only matter to an interactive editor (gumps, sounds). The animation
+/// files are not one of CentrED's -- it has no mobiles to draw -- and are opened only when a
+/// mobile overlay asks for them.
 /// </summary>
 public sealed class UoFiles : IDisposable
 {
@@ -22,8 +24,15 @@ public sealed class UoFiles : IDisposable
     /// <summary>Shard items folded into the statics layer, or null when none were asked for.</summary>
     public ItemOverlay? Items { get; }
 
+    /// <summary>anim.mul and its successors, opened only when a mobile overlay needs them.</summary>
+    public AnimationFile? Animations { get; }
+
+    /// <summary>The shard's creatures and people, or null when none were asked for.</summary>
+    public MobileOverlay? Mobiles { get; }
+
     private UoFiles(TileDataFile tileData, ArtFile art, TexmapFile texmaps, HuesFile hues, MapFile map,
-        StaticsFile statics, MapDimensions dimensions, MultiFile? multis, ItemOverlay? items)
+        StaticsFile statics, MapDimensions dimensions, MultiFile? multis, ItemOverlay? items,
+        AnimationFile? animations, MobileOverlay? mobiles)
     {
         TileData = tileData;
         Art = art;
@@ -34,6 +43,8 @@ public sealed class UoFiles : IDisposable
         Dimensions = dimensions;
         Multis = multis;
         Items = items;
+        Animations = animations;
+        Mobiles = mobiles;
     }
 
     public static UoFiles Open(RenderOptions options, Action<string>? warn = null)
@@ -86,6 +97,28 @@ public sealed class UoFiles : IDisposable
             items = ItemOverlay.Load(itemsPath, dimensions, multis, warn);
         }
 
+        AnimationFile? animations = null;
+        MobileOverlay? mobiles = null;
+
+        if (options.Mobiles is { } mobilesPath && !string.IsNullOrWhiteSpace(mobilesPath))
+        {
+            animations = OpenAnimations(resolver, spriteBudget);
+
+            if (animations.HasFile(1))
+            {
+                var bodies = new BodyTables(resolver, animations.BaseEntryCount);
+                mobiles = MobileOverlay.Load(mobilesPath, dimensions, animations, bodies, tileData, warn);
+            }
+            else
+            {
+                animations.Dispose();
+                animations = null;
+
+                warn?.Invoke("Mobiles were asked for but anim.idx/anim.mul are not in the data " +
+                             "folder, so none were drawn.");
+            }
+        }
+
         var statics = new StaticsFile(
             resolver.Require($"staidx{index}.mul"),
             resolver.Require($"statics{index}.mul"),
@@ -94,11 +127,32 @@ public sealed class UoFiles : IDisposable
             options.CachedBlocks,
             items);
 
-        return new UoFiles(tileData, art, texmaps, hues, map, statics, dimensions, multis, items);
+        return new UoFiles(tileData, art, texmaps, hues, map, statics, dimensions, multis, items,
+            animations, mobiles);
+    }
+
+    /// <summary>
+    /// anim.mul through anim5.mul. Only the first is required -- the rest were added by later
+    /// expansions and a data folder predating one simply has no bodies that need it.
+    /// </summary>
+    private static AnimationFile OpenAnimations(DataFolder resolver, long spriteBudget)
+    {
+        var paths = new (string Index, string Data)?[5];
+
+        for (int i = 0; i < 5; i++)
+        {
+            string name = i == 0 ? "anim" : $"anim{i + 1}";
+
+            if (resolver.TryGet($"{name}.idx", out var index) && resolver.TryGet($"{name}.mul", out var data))
+                paths[i] = (index, data);
+        }
+
+        return new AnimationFile(paths, spriteBudget);
     }
 
     public void Dispose()
     {
+        Animations?.Dispose();
         Multis?.Dispose();
         Statics.Dispose();
         Map.Dispose();

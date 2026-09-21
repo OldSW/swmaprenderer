@@ -9,12 +9,14 @@ public readonly record struct RenderStats(
     TileRhombus Range,
     int LandDrawn,
     int StaticsDrawn,
+    int MobilesDrawn,
     TimeSpan Elapsed);
 
 /// <summary>
 /// Drives one frame, following the order CentrED's MapManager.Draw uses: terrain first, then
 /// statics. The passes are not independent -- statics rely on the depth buffer the terrain pass
-/// leaves behind to be occluded by hills in front of them.
+/// leaves behind to be occluded by hills in front of them. Mobiles come last, for the same
+/// reason and because they stand in front of the scenery of the tile they are on.
 /// </summary>
 public sealed class SceneRenderer
 {
@@ -56,9 +58,10 @@ public sealed class SceneRenderer
 
         int landDrawn = DrawLand(range, projection);
         int staticsDrawn = DrawStatics(range, projection);
+        int mobilesDrawn = DrawMobiles(range, projection);
 
         stopwatch.Stop();
-        return new RenderStats(range, landDrawn, staticsDrawn, stopwatch.Elapsed);
+        return new RenderStats(range, landDrawn, staticsDrawn, mobilesDrawn, stopwatch.Elapsed);
     }
 
     private int DrawLand(TileRhombus range, IsoProjection projection)
@@ -114,6 +117,53 @@ public sealed class SceneRenderer
     }
 
     /// <summary>
+    /// Draws the shard's mobiles, each as its body followed by what it is wearing.
+    ///
+    /// The frames share the statics technique: an animation frame is a hued sprite like any
+    /// other, and the only thing the pixel stage would have to know about a mobile -- that a
+    /// worn item may be partially hued where the body under it is not -- is already settled in
+    /// the vertex hue.
+    /// </summary>
+    private int DrawMobiles(TileRhombus range, IsoProjection projection)
+    {
+        if (_scene.Files.Mobiles is not { } mobiles || _scene.Files.Animations is not { } animations)
+            return 0;
+
+        int drawn = 0;
+        _effect.CurrentTechnique = Technique.Statics;
+        _renderer.Begin(_effect, projection);
+
+        var map = _scene.Files.Map;
+        foreach (var (x, y) in range.Iterate(map.Width, map.Height))
+        {
+            foreach (var placement in mobiles.Get(x, y))
+            {
+                if (!_scene.CanDrawMobile(placement))
+                    continue;
+
+                var sprites = placement.Sprites;
+                for (int layer = 0; layer < sprites.Length; layer++)
+                {
+                    var sprite = sprites[layer];
+                    var frame = animations.GetFrame(sprite.File, sprite.Index, sprite.Flip);
+
+                    if (frame.IsEmpty)
+                        continue;
+
+                    _renderer.DrawMapObject(
+                        _scene.CreateMobile(placement, frame, sprite.Hue, sprite.PartialHue, layer),
+                        default);
+                }
+
+                drawn++;
+            }
+        }
+
+        _renderer.End();
+        return drawn;
+    }
+
+    /// <summary>
     /// The tiles that can reach this canvas.
     ///
     /// CentrED derives its range from a heuristic -- a diamond of (width + height) / zoom / 2.6
@@ -127,9 +177,21 @@ public sealed class SceneRenderer
     {
         var art = _scene.Files.Art;
 
+        // A mobile's frames reach further past its tile than a static's art does in places --
+        // a dragon is wider than anything in art.mul -- so whichever reaches further sets the
+        // margin, exactly as if the animation frames were statics too.
+        int width = art.MaxStaticWidth;
+        int height = art.MaxStaticHeight;
+
+        if (_scene.Files.Mobiles is { } mobiles)
+        {
+            width = Math.Max(width, mobiles.MaxSpriteWidth);
+            height = Math.Max(height, mobiles.MaxSpriteHeight);
+        }
+
         return projection.VisibleTiles(
             0, 0, _rasterizer.Width, _rasterizer.Height,
             _options.MinZ, _options.MaxZ,
-            art.MaxStaticWidth, art.MaxStaticHeight);
+            width, height);
     }
 }

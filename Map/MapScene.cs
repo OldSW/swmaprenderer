@@ -37,6 +37,9 @@ public sealed class MapScene
 
     public StaticObject CreateStatic(StaticTile tile) => new(this, tile);
 
+    public MobileObject CreateMobile(MobilePlacement placement, AnimationFrame frame, ushort hue,
+        bool partialHue, int layer) => new(this, placement, frame, hue, partialHue, layer);
+
     private bool WithinZRange(sbyte z) => z >= Options.MinZ && z <= Options.MaxZ;
 
     /// <summary>
@@ -103,6 +106,12 @@ public sealed class MapScene
         return WithinZRange(tile.Z);
     }
 
+    /// <summary>
+    /// Mobiles carry no tile data of their own, so the z range is all there is to test. Their
+    /// frames are clipped to the facet by the tile they stand on, which the overlay checks.
+    /// </summary>
+    public bool CanDrawMobile(MobilePlacement placement) => WithinZRange(placement.Z);
+
     public float GetDefaultAlpha(ushort tileId) =>
         Files.TileData.GetStatic(tileId).IsTranslucent ? TranslucentAlpha : 1.0f;
 
@@ -110,11 +119,16 @@ public sealed class MapScene
     /// Ported from CentrED's HuesManager.GetHueVector. Packs the hue into the vertex channel
     /// the pixel shader reads: (zero-based hue id, unused, alpha, mode).
     /// </summary>
-    public Vector4 GetHueVector(ushort tileId, ushort hue)
-    {
-        bool partial = Files.TileData.GetStatic(tileId).IsPartialHue;
-        float alpha = GetDefaultAlpha(tileId);
+    public Vector4 GetHueVector(ushort tileId, ushort hue) =>
+        GetHueVector(hue, Files.TileData.GetStatic(tileId).IsPartialHue, GetDefaultAlpha(tileId));
 
+    /// <summary>
+    /// The same packing for callers that know the hue and its mode without a tile to read them
+    /// from -- an animation frame, whose partial hueing comes from the worn item rather than
+    /// from the frame itself.
+    /// </summary>
+    public Vector4 GetHueVector(ushort hue, bool partial, float alpha = 1.0f)
+    {
         // The high bit forces partial hueing regardless of the tile's own flags.
         if ((hue & 0x8000) != 0)
         {

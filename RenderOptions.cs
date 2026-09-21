@@ -85,6 +85,15 @@ public sealed class RenderOptions
     /// </summary>
     public string? Items { get; set; }
 
+    /// <summary>
+    /// JSON export of a shard's mobiles, drawn over the statics from the animation files.
+    ///
+    /// An array of objects with a body, a hue, a direction and a position of x, y and z, plus
+    /// an equipment list for the ones that wear anything. As with <see cref="Items"/> the file
+    /// names no facet.
+    /// </summary>
+    public string? Mobiles { get; set; }
+
     /// <summary>Log per-stage timings and tile counts.</summary>
     public bool Verbose { get; set; }
 
@@ -230,6 +239,9 @@ public sealed class RenderOptions
         if (!string.IsNullOrWhiteSpace(Items) && !File.Exists(Items))
             errors.Add($"Item file '{Items}' does not exist.");
 
+        if (!string.IsNullOrWhiteSpace(Mobiles) && !File.Exists(Mobiles))
+            errors.Add($"Mobile file '{Mobiles}' does not exist.");
+
         if (Map is < 0 or > 5)
             errors.Add($"Map must be between 0 and 5 (got {Map}).");
 
@@ -260,8 +272,8 @@ public sealed class RenderOptions
         if (MapWidth % 8 != 0 || MapHeight % 8 != 0)
             errors.Add("MapWidth and MapHeight must be multiples of 8 (maps are stored as 8x8 blocks).");
 
-        if (!ShowLand && !ShowStatics)
-            errors.Add("Nothing to draw: both ShowLand and ShowStatics are disabled.");
+        if (!ShowLand && !ShowStatics && string.IsNullOrWhiteSpace(Mobiles))
+            errors.Add("Nothing to draw: both ShowLand and ShowStatics are disabled, and no --mobiles file was given.");
 
         if (SpriteCacheMegabytes < 16)
             errors.Add($"SpriteCacheMegabytes must be at least 16 (got {SpriteCacheMegabytes}).");

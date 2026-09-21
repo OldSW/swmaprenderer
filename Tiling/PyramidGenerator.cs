@@ -200,7 +200,7 @@ public sealed class PyramidGenerator
                 var projection = _grid.ProjectionFor(plan.MaxZoom, slice.X, slice.Y);
                 var stats = renderer.Render(projection);
 
-                if (stats.LandDrawn == 0 && stats.StaticsDrawn == 0)
+                if (stats.LandDrawn == 0 && stats.StaticsDrawn == 0 && stats.MobilesDrawn == 0)
                 {
                     // Off the edge of the facet. Leaving the file absent is what makes the
                     // viewer show nothing there rather than a black square.

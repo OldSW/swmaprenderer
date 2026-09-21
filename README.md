@@ -502,7 +502,7 @@ through for tile data and options. Passing it explicitly keeps that code testabl
   supported, detected from the file length; `--tiledata-format` overrides the detection.
 - The background is opaque black, matching the reference's `Clear(Color.Black)`.
 
-## Licensing
+## SixLabors Licensing
 
 Image encoding uses [SixLabors.ImageSharp](https://github.com/SixLabors/ImageSharp) under the
 Six Labors Split License. Version 4.x validates a licence key at build time; `sixlabors.lic` in

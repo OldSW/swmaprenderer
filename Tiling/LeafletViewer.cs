@@ -15,7 +15,8 @@ public static class LeafletViewer
 {
     public const string FileName = "index.html";
 
-    public static string Write(SliceGrid grid, PyramidPlan plan, int mapIndex, string outputDirectory)
+    public static string Write(SliceGrid grid, PyramidPlan plan, int mapIndex, string outputDirectory,
+        ImageFormat format)
     {
         var config = new
         {
@@ -39,6 +40,8 @@ public static class LeafletViewer
             mapWidth = grid.Map.Width,
             mapHeight = grid.Map.Height,
             tilesPerSlice = grid.TilesPerSlice,
+            extension = format.Extension,
+            format = format.Name,
         };
 
         string json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
@@ -85,8 +88,9 @@ public static class LeafletViewer
         <script>
         const CFG = /*__CONFIG__*/null;
 
-        // A transparent 1x1, served for slices that were never written. Ocean and the area off
-        // the edge of the facet have no files at all, and this keeps those quiet.
+        // A transparent 1x1 PNG, served for slices that were never written whatever the tiles
+        // themselves are encoded as. Ocean and the area off the edge of the facet have no files
+        // at all, and this keeps those quiet.
         const BLANK = 'data:image/png;base64,' +
           'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
@@ -119,7 +123,7 @@ public static class LeafletViewer
           zoomSnap: 0,
         });
 
-        L.tileLayer('{z}/{x}/{y}.png', {
+        L.tileLayer('{z}/{x}/{y}' + CFG.extension, {
           tileSize: CFG.sliceSize,
           minZoom: CFG.minZoom,
           maxZoom: VIEW_MAX,

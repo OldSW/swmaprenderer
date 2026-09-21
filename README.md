@@ -109,6 +109,87 @@ Tiles that were never written -- ocean, or off the edge of the facet -- simply 4
 through to the page background, which is why pyramid slices default to a transparent background
 where a single image defaults to black.
 
+## Shard items
+
+`statics{N}.mul` holds the world as the client shipped it. Everything players have since put
+down — locked-down furniture, decorations, the houses themselves — lives only in the server's
+save, so a map rendered from client files alone shows an empty town. `--items <file>` folds a
+JSON export of those items back in.
+
+```
+swmaprenderer --map 1 --items lockedDownItems.json --x 1550 --y 1690 -z 2 -o tavern.png
+```
+
+`appsettings.json` can carry the path under `Render:Items` so that every run includes them;
+`--items ""` turns the overlay back off for a single run.
+
+The file is an array of objects; anything beyond these four keys is ignored, so a server's own
+export usually needs no reshaping.
+
+```json
+[
+  { "itemId": 2896, "hue": 0, "multi": false, "position": { "x": 1547, "y": 1682, "z": 0 } },
+  { "itemId": 16427, "hue": 0, "multi": true,  "position": { "x": 3782, "y": 2251, "z": 50 } }
+]
+```
+
+`itemId` is an art index, the same one `statics{N}.mul` stores, and `hue` is the same 1-based
+hue index, so both pass through untouched. An item with `multi` set names a multi instead:
+`itemId - 0x4000` is looked up in `multi.idx`/`multi.mul` and expanded into its components,
+each offset from the item's own position. Without those two files in the data folder, multis
+are skipped with a warning.
+
+The placements are grouped by map block and merged into `StaticsFile` before it sorts each
+cell, which is what makes them behave like real statics rather than stickers: a locked-down
+chair sorts against the floor it stands on, occludes and is occluded correctly, and is picked
+up by the view range and the tile pyramid without either knowing it is there.
+
+Two things the format cannot tell the renderer:
+
+- **It names no facet.** Every item is placed on whichever `--map` is being rendered. Pointing
+  an export at the wrong one scatters furniture across it; `--verbose` reports how many tiles
+  landed off the map, which is the symptom.
+- **It does not say what is inside something else.** Items held in a container are typically
+  exported with their position inside the container's gump rather than a world position, and
+  those land in a heap near tile 0,0. Filtering them out belongs in the export.
+
+## Image formats
+
+`--format` picks the encoder: `png`, `jpg`, `gif`, `webp` or `webp-lossless`. A single image
+otherwise follows its output extension; a pyramid defaults to PNG. `--quality` (1-100, default
+85) applies to the lossy two.
+
+Measured on one 704x704 slice of detailed terrain, and on a 76-slice pyramid of the same area:
+
+| format | size vs PNG | alpha | lossless | notes |
+| --- | --- | --- | --- | --- |
+| `png` | 1.00 | yes | yes | the default; fastest to encode |
+| `webp-lossless` | 0.45 | yes | yes | **byte-identical pixels at under half the size**, ~1.9x the encode time |
+| `webp` | 0.28 | yes | no | smallest with transparency intact |
+| `jpg` | 0.27 | **no** | no | smallest overall, but see below |
+| `gif` | 0.54 | 1-bit | yes | 256 colours; holds up better than expected, because the source art is 16-bit anyway |
+
+`webp-lossless` was verified genuinely lossless rather than taken on trust: decoded back, it is
+bit-identical to the PNG across every channel of every pixel. For a whole facet that is the
+difference between 2.5 GB and 1.1 GB for the same image data, so it is worth preferring over the
+PNG default unless something in the chain cannot read WebP.
+
+**JPEG has no alpha.** Pyramid slices default to a transparent background, so with `--format jpg`
+they are flattened onto an opaque colour first (`--background` chooses it, black otherwise) and
+the renderer says so. Flattening is done properly rather than by dropping the alpha channel:
+discarding it would encode whatever colour sat beneath a fully transparent pixel -- black, for a
+discarded texel -- and put a dark fringe around every sprite. The consequence is still that
+partly covered slices become black squares instead of showing the page through, so JPEG suits a
+pyramid that covers its whole area and PNG or WebP suits a `--region`.
+
+Shallower pyramid levels are averaged from the level below, so a lossy format re-encodes at each
+step. The averaging attenuates the artefacts it inherits, and at quality 85 the top levels hold
+up, but `webp-lossless` avoids the question entirely.
+
+Changing format on an existing pyramid is detected: a resume only looks for the extension it is
+writing now, so it would re-render everything and leave two formats interleaved. The renderer
+warns and names the format already there.
+
 ## Configuration
 
 Defaults live in `appsettings.json` under `Render`, can be overridden by environment variables
@@ -127,6 +208,7 @@ list. The frequently used ones:
 | `--flat` | Flatten every tile to z=0, exposing building interiors |
 | `--nodraw` | Include the placeholder tiles the client hides |
 | `--prefer-texmaps` | Use terrain textures even where land art would do |
+| `--items <file>` | JSON export of shard items to draw over the client's statics |
 | `--min-z`, `--max-z` | Restrict the z range |
 | `-v, --verbose` | Report the view range, tile counts and timings |
 | `--tiles <dir>` | Write a browsable tile pyramid here instead of one image |
@@ -136,6 +218,8 @@ list. The frequently used ones:
 | `--threads <n>` | Slices rendered at once (default: every core) |
 | `--overwrite`, `--dry-run` | Re-render existing slices / report the plan and stop |
 | `-b, --background <c>` | `transparent`, `black`, `white` or `#RRGGBB[AA]` |
+| `-f, --format <fmt>` | `png`, `jpg`, `gif`, `webp`, `webp-lossless` |
+| `-q, --quality <1-100>` | Encoder quality for `jpg` and `webp` (default 85) |
 
 Note that `--data` is resolved against the current working directory, while `appsettings.json`
 is read from the binary's directory.
@@ -150,8 +234,8 @@ size the height is trusted and the width re-derived — `vanilla_client`'s `map0
 
 | Path | Contents |
 | --- | --- |
-| `Assets/` | `.mul` readers: tiledata, art, texmaps, hues, plus the memory-mapped file and index primitives |
-| `Map/` | Terrain and statics layers, facet dimensions, and `MapScene` — the data and visibility rules the geometry is built against |
+| `Assets/` | `.mul` readers: tiledata, art, texmaps, hues, multis, plus the memory-mapped file and index primitives |
+| `Map/` | Terrain and statics layers, the shard-item overlay, facet dimensions, and `MapScene` — the data and visibility rules the geometry is built against |
 | `Rendering/` | The port: `IsoProjection`, `LandObject`, `StaticObject`, `MapRenderer`, `MapEffect`, `Rasterizer` |
 | `Tiling/` | `SliceGrid` (canvas geometry), `PyramidGenerator`, `LeafletViewer` |
 

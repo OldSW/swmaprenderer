@@ -16,8 +16,14 @@ public sealed class UoFiles : IDisposable
     public StaticsFile Statics { get; }
     public MapDimensions Dimensions { get; }
 
+    /// <summary>The multi definitions, opened only when an item overlay needs them.</summary>
+    public MultiFile? Multis { get; }
+
+    /// <summary>Shard items folded into the statics layer, or null when none were asked for.</summary>
+    public ItemOverlay? Items { get; }
+
     private UoFiles(TileDataFile tileData, ArtFile art, TexmapFile texmaps, HuesFile hues, MapFile map,
-        StaticsFile statics, MapDimensions dimensions)
+        StaticsFile statics, MapDimensions dimensions, MultiFile? multis, ItemOverlay? items)
     {
         TileData = tileData;
         Art = art;
@@ -26,6 +32,8 @@ public sealed class UoFiles : IDisposable
         Map = map;
         Statics = statics;
         Dimensions = dimensions;
+        Multis = multis;
+        Items = items;
     }
 
     public static UoFiles Open(RenderOptions options, Action<string>? warn = null)
@@ -64,18 +72,34 @@ public sealed class UoFiles : IDisposable
         var texmaps = new TexmapFile(resolver.Require("texidx.mul"), resolver.Require("texmaps.mul"), spriteBudget);
         var hues = new HuesFile(resolver.Require("hues.mul"));
         var map = new MapFile(mapPath, dimensions, options.CachedBlocks);
+
+        MultiFile? multis = null;
+        ItemOverlay? items = null;
+
+        if (options.Items is { } itemsPath && !string.IsNullOrWhiteSpace(itemsPath))
+        {
+            // Only houses and the like need multi.mul, and not every data folder ships it, so a
+            // missing pair is a warning at the point it costs something rather than an error.
+            if (resolver.TryGet("multi.idx", out var multiIndex) && resolver.TryGet("multi.mul", out var multiData))
+                multis = new MultiFile(multiIndex, multiData);
+
+            items = ItemOverlay.Load(itemsPath, dimensions, multis, warn);
+        }
+
         var statics = new StaticsFile(
             resolver.Require($"staidx{index}.mul"),
             resolver.Require($"statics{index}.mul"),
             dimensions,
             tileData,
-            options.CachedBlocks);
+            options.CachedBlocks,
+            items);
 
-        return new UoFiles(tileData, art, texmaps, hues, map, statics, dimensions);
+        return new UoFiles(tileData, art, texmaps, hues, map, statics, dimensions, multis, items);
     }
 
     public void Dispose()
     {
+        Multis?.Dispose();
         Statics.Dispose();
         Map.Dispose();
         Texmaps.Dispose();

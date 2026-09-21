@@ -32,8 +32,13 @@ public static class CommandLine
         ["--map-width"] = "Render:MapWidth",
         ["--map-height"] = "Render:MapHeight",
         ["--tiledata-format"] = "Render:TileDataFormat",
+        ["--items"] = "Render:Items",
         ["--background"] = "Render:Background",
         ["-b"] = "Render:Background",
+        ["--format"] = "Render:Format",
+        ["-f"] = "Render:Format",
+        ["--quality"] = "Render:Quality",
+        ["-q"] = "Render:Quality",
         ["--land"] = "Render:ShowLand",
         ["--statics"] = "Render:ShowStatics",
         ["--nodraw"] = "Render:ShowNoDraw",
@@ -196,12 +201,19 @@ public static class CommandLine
           -h, --height <px>       Output image height
           -z, --zoom <0.2-4.0>    Larger zooms in
           -o, --out <file>        Output image path; format follows the extension
+          -f, --format <fmt>      png | jpg | gif | webp | webp-lossless
+                                  (default: the output extension, or png for --tiles)
+          -q, --quality <1-100>   Encoder quality for jpg and webp (default 85)
 
               --min-z <-128..127> Skip tiles below this z
               --max-z <-128..127> Skip tiles above this z
               --map-width <n>     Override facet width in tiles (default: detect)
               --map-height <n>    Override facet height in tiles (default: detect)
               --tiledata-format   Auto | Legacy | Extended
+              --items <file>      JSON export of a shard's items to draw on top of the
+                                  statics in the client files. It names no facet, so it
+                                  is placed on whichever --map is being rendered.
+                                  Pass "" to switch off a path set in appsettings.json
           -b, --background <c>    transparent | black | white | #RRGGBB[AA]
 
               --[no-]land         Draw terrain (default: on)
@@ -238,5 +250,8 @@ public static class CommandLine
 
           swmaprenderer --data ./client --map 0 --tiles ./web/map0 \
                         --region 1350,1600,1500,1750
+
+          swmaprenderer --map 1 --items lockedDownItems.json \
+                        --x 1550 --y 1650 -o britain.png
         """;
 }

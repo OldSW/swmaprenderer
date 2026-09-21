@@ -1,6 +1,4 @@
 using Microsoft.Extensions.Configuration;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using SwMapRenderer;
 using SwMapRenderer.Assets;
 using SwMapRenderer.Map;
@@ -27,6 +25,16 @@ try
         Console.WriteLine($"Tile data   : {files.TileData.Format} format, " +
                           $"{files.TileData.StaticData.Length} static entries");
         Console.WriteLine($"Hues        : {files.Hues.HueCount}");
+
+        if (files.Items is { } items)
+        {
+            var s = items.Stats;
+            Console.WriteLine($"Items       : {s.Items:N0} from {Path.GetFullPath(options.Items!)} " +
+                              $"-> {s.Tiles:N0} statics" +
+                              (s.Multis > 0 ? $" ({s.Multis:N0} multis expanded)" : string.Empty) +
+                              (s.OffMap + s.Unresolved > 0 ? $", {s.OffMap + s.Unresolved:N0} skipped" : string.Empty));
+        }
+
         Console.WriteLine($"Centre      : {options.X},{options.Y}  zoom {options.Zoom:0.##}");
     }
 
@@ -66,7 +74,7 @@ static int RunSingleImage(MapScene scene, RenderOptions options, UoFiles files)
     var renderer = new SceneRenderer(scene);
     var stats = renderer.Render(renderer.CentredProjection);
 
-    Save(renderer.Output, options.Output);
+    Save(renderer.Output, options);
 
     if (options.Verbose)
     {
@@ -76,8 +84,34 @@ static int RunSingleImage(MapScene scene, RenderOptions options, UoFiles files)
         Console.WriteLine($"Render time : {stats.Elapsed.TotalMilliseconds:0} ms");
     }
 
-    Console.WriteLine($"Wrote {options.Width}x{options.Height} image to {Path.GetFullPath(options.Output)}");
+    var format = options.ResolvedFormat;
+    WarnIfAlphaWillBeLost(options, format);
+
+    // An explicit --format wins over the extension, which is what you want when writing to a
+    // pipe-ish name, and confusing when it silently disagrees with the name on disk.
+    var byExtension = ImageOutput.FromPath(options.Output);
+    if (byExtension != null && byExtension.Extension != format.Extension)
+    {
+        Warn($"writing {format.Name} into '{Path.GetFileName(options.Output)}', whose extension " +
+             $"says {byExtension.Name}. --format wins; rename the output to match.");
+    }
+
+    Console.WriteLine($"Wrote {options.Width}x{options.Height} {format.Name} " +
+                      $"to {Path.GetFullPath(options.Output)}");
     return 0;
+}
+
+/// <summary>
+/// A transparent background asked of a format that cannot carry one is a silent surprise
+/// otherwise: the image comes back opaque and the caller only finds out by looking.
+/// </summary>
+static void WarnIfAlphaWillBeLost(RenderOptions options, ImageFormat format)
+{
+    if (format.SupportsAlpha || options.BackgroundColor.W >= 1f)
+        return;
+
+    Console.Error.WriteLine($"warning: {format.Name} has no transparency, so the background was " +
+                            $"flattened to opaque. Pass --background to choose the colour.");
 }
 
 static int RunTiling(MapScene scene, RenderOptions options)
@@ -91,7 +125,11 @@ static int RunTiling(MapScene scene, RenderOptions options)
     var generator = new PyramidGenerator(scene, grid, directory);
     var plan = generator.Plan();
 
+    var format = options.ResolvedFormat;
+
     Console.WriteLine($"Facet       : map{options.Map} ({grid.Map.Width}x{grid.Map.Height} tiles)");
+    Console.WriteLine($"Format      : {format.Name}" +
+                      (format.IsLossy ? $" at quality {options.Quality}" : " (lossless)"));
     Console.WriteLine($"Canvas      : {grid.CanvasWidth}x{grid.CanvasHeight} px at {options.Zoom:0.##}x " +
                       $"({grid.SliceSize}px slices of {grid.TilesPerSlice}x{grid.TilesPerSlice} tiles)");
     Console.WriteLine($"Region      : tiles {plan.Region.X0},{plan.Region.Y0} .. {plan.Region.X1},{plan.Region.Y1}");
@@ -103,14 +141,23 @@ static int RunTiling(MapScene scene, RenderOptions options)
     // than the slice count: --max-zoom changes how many slices there are, while --zoom changes
     // how big each one is, and both need to move the number.
     int threads = options.Threads > 0 ? options.Threads : Environment.ProcessorCount;
-    Console.WriteLine($"Rough cost  : ~{Format(plan.Estimate(threads))} on {threads} threads, " +
-                      $"~{FormatSize(plan.TotalSliceCount * plan.MegabytesPerSlice)} on disk");
+    Console.WriteLine($"Rough cost  : ~{Format(plan.Estimate(threads) * format.TimeFactor)} on {threads} threads, " +
+                      $"~{FormatSize(plan.TotalSliceCount * plan.MegabytesPerSlice * format.SizeFactor)} on disk");
 
     if (plan.MaxZoomWasCapped)
     {
         Warn($"--max-zoom {options.MaxZoom} is deeper than this grid goes; using {plan.MaxZoom}. " +
              $"The number of levels follows --slice-tiles, not --zoom. To render finer than " +
              $"{grid.TilePixelsAtLevel(plan.MaxZoom):0.##}px per tile, raise --zoom.");
+    }
+
+    WarnIfAlphaWillBeLost(options, format);
+
+    if (generator.DetectForeignFormat(plan) is { } foreign)
+    {
+        Warn($"{directory} already holds {foreign.Name} slices. A resume only looks for " +
+             $"{format.Name}, so this run would render everything again and leave both formats " +
+             $"side by side. Delete the directory, or pass --format {foreign.Name}.");
     }
 
     if (options.DryRun)
@@ -123,13 +170,15 @@ static int RunTiling(MapScene scene, RenderOptions options)
     Directory.CreateDirectory(directory);
 
     var result = generator.Generate(options.Verbose ? Console.WriteLine : null);
-    string page = LeafletViewer.Write(grid, plan, options.Map, directory);
+    string page = LeafletViewer.Write(grid, plan, options.Map, directory, options.ResolvedFormat);
 
     Console.WriteLine();
     Console.WriteLine($"Rendered {result.Rendered:N0} slices, downsampled {result.Downsampled:N0}, " +
                       $"skipped {result.SkippedEmpty:N0} empty and {result.SkippedExisting:N0} already present " +
                       $"in {Format(result.Elapsed)}.");
-    Console.WriteLine($"Open {page}");
+    // A file:// URI rather than the bare path: terminals turn it into something clickable, and
+    // it survives the spaces and non-ASCII that a path picks up from --tiles.
+    Console.WriteLine($"Open {new Uri(page).AbsoluteUri}");
     return 0;
 }
 
@@ -163,19 +212,17 @@ static RenderOptions LoadOptions(string[] args)
     }
 }
 
-static void Save(Rasterizer rasterizer, string path)
+static void Save(Rasterizer rasterizer, RenderOptions options)
 {
-    var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+    var directory = Path.GetDirectoryName(Path.GetFullPath(options.Output));
     if (!string.IsNullOrEmpty(directory))
         Directory.CreateDirectory(directory);
 
     var pixels = new byte[rasterizer.Width * rasterizer.Height * 4];
     rasterizer.CopyTo(pixels);
 
-    using var image = Image.LoadPixelData<Rgba32>(pixels, rasterizer.Width, rasterizer.Height);
-
-    // Format follows the extension; ImageSharp reports unsupported ones itself.
-    image.Save(path);
+    ImageOutput.Save(pixels, rasterizer.Width, rasterizer.Height, options.Output,
+        options.ResolvedFormat, options.Quality, options.BackgroundColor);
 }
 
 static void Warn(string message) => Console.Error.WriteLine($"warning: {message}");

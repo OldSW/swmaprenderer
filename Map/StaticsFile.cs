@@ -6,6 +6,10 @@ namespace SwMapRenderer.Map;
 /// staidx{N}.mul + statics{N}.mul -- everything standing on the terrain. The index is one
 /// 12-byte record per map block (same column-major ordering as map{N}.mul) pointing at a run
 /// of 7-byte static records.
+///
+/// An <see cref="ItemOverlay"/> may add tiles the client files do not know about. They are
+/// merged in before the cell sort, so they are indistinguishable from shipped statics
+/// everywhere downstream -- drawing, depth ordering and the view range all treat them alike.
 /// </summary>
 public sealed class StaticsFile : IDisposable
 {
@@ -15,16 +19,18 @@ public sealed class StaticsFile : IDisposable
     private readonly TileDataFile _tileData;
     private readonly MapDimensions _dimensions;
     private readonly BlockCache<List<StaticTile>[]> _blocks;
+    private readonly ItemOverlay? _overlay;
 
     private static readonly List<StaticTile> EmptyCell = [];
 
     public StaticsFile(string indexPath, string dataPath, MapDimensions dimensions, TileDataFile tileData,
-        int cachedBlocks)
+        int cachedBlocks, ItemOverlay? overlay = null)
     {
         _file = new IndexedMulFile(indexPath, dataPath);
         _dimensions = dimensions;
         _tileData = tileData;
         _blocks = new BlockCache<List<StaticTile>[]>(cachedBlocks);
+        _overlay = overlay;
     }
 
     /// <summary>
@@ -64,6 +70,12 @@ public sealed class StaticsFile : IDisposable
 
             var tile = new StaticTile(id, (ushort)(bx * 8 + localX), (ushort)(by * 8 + localY), z, hue);
             (cells[localY * 8 + localX] ??= []).Add(tile);
+        }
+
+        if (_overlay != null)
+        {
+            foreach (var tile in _overlay.Block(index))
+                (cells[(tile.Y & 7) * 8 + (tile.X & 7)] ??= []).Add(tile);
         }
 
         SortCells(cells);

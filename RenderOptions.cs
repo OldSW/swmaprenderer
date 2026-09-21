@@ -30,6 +30,17 @@ public sealed class RenderOptions
     public string Output { get; set; } = "map.png";
 
     /// <summary>
+    /// Image format: png, jpg, gif, webp or webp-lossless.
+    ///
+    /// Left unset a single image follows its output extension, and a pyramid uses PNG. Setting
+    /// it explicitly overrides both.
+    /// </summary>
+    public string? Format { get; set; }
+
+    /// <summary>Encoder quality for the lossy formats, 1-100. Ignored by the others.</summary>
+    public int Quality { get; set; } = 85;
+
+    /// <summary>
     /// Canvas colour before anything is drawn: "transparent", "black", or #RGB / #RRGGBB /
     /// #RRGGBBAA.
     ///
@@ -64,6 +75,15 @@ public sealed class RenderOptions
     public int MapHeight { get; set; }
 
     public TileDataFormat TileDataFormat { get; set; } = TileDataFormat.Auto;
+
+    /// <summary>
+    /// JSON export of a shard's items, drawn on top of the statics in the client files.
+    ///
+    /// An array of objects with an itemId, a hue, a multi flag and a position of x, y and z;
+    /// anything else in them is ignored. The file names no facet, so it is placed on whichever
+    /// map is being rendered.
+    /// </summary>
+    public string? Items { get; set; }
 
     /// <summary>Log per-stage timings and tile counts.</summary>
     public bool Verbose { get; set; }
@@ -137,6 +157,15 @@ public sealed class RenderOptions
     /// <summary>True when the run should write a pyramid rather than a single image.</summary>
     public bool IsTiling => !string.IsNullOrWhiteSpace(Tiles);
 
+    /// <summary>
+    /// The format to encode with. An explicit --format wins; otherwise a single image follows
+    /// the extension it was asked to write, and a pyramid defaults to PNG.
+    /// </summary>
+    public ImageFormat ResolvedFormat =>
+        ImageOutput.Resolve(Format)
+        ?? (IsTiling ? ImageFormat.Png : ImageOutput.FromPath(Output))
+        ?? ImageFormat.Png;
+
     /// <summary>Parsed form of <see cref="Background"/>, premultiplied to match the blend mode.</summary>
     public Vector4 BackgroundColor =>
         ParseColor(Background ?? DefaultBackground) ?? new Vector4(0f, 0f, 0f, 1f);
@@ -178,6 +207,18 @@ public sealed class RenderOptions
     {
         var errors = new List<string>();
 
+        if (Format != null && ImageOutput.Resolve(Format) == null)
+            errors.Add($"Format '{Format}' is not one of: {ImageOutput.Names}.");
+
+        if (Quality is < 1 or > 100)
+            errors.Add($"Quality must be between 1 and 100 (got {Quality}).");
+
+        if (!IsTiling && Format == null && ImageOutput.FromPath(Output) == null)
+        {
+            errors.Add($"Cannot tell the format from '{Output}'. Use a known extension " +
+                       $"(.png, .jpg, .gif, .webp) or pass --format.");
+        }
+
         if (Background != null && ParseColor(Background) == null)
             errors.Add($"Background '{Background}' is not a colour. Use transparent, black, white, or #RRGGBB[AA].");
 
@@ -185,6 +226,9 @@ public sealed class RenderOptions
             errors.Add("DataPath must be set.");
         else if (!Directory.Exists(DataPath))
             errors.Add($"Data folder '{DataPath}' does not exist.");
+
+        if (!string.IsNullOrWhiteSpace(Items) && !File.Exists(Items))
+            errors.Add($"Item file '{Items}' does not exist.");
 
         if (Map is < 0 or > 5)
             errors.Add($"Map must be between 0 and 5 (got {Map}).");

@@ -66,6 +66,7 @@ public sealed class PyramidGenerator
     private readonly SliceGrid _grid;
     private readonly RenderOptions _options;
     private readonly string _outputDirectory;
+    private readonly ImageFormat _format;
 
     public PyramidGenerator(MapScene scene, SliceGrid grid, string outputDirectory)
     {
@@ -73,6 +74,32 @@ public sealed class PyramidGenerator
         _grid = grid;
         _options = scene.Options;
         _outputDirectory = outputDirectory;
+        _format = _options.ResolvedFormat;
+    }
+
+    /// <summary>
+    /// Slices already present in the output directory under a different extension, which a
+    /// resume would silently ignore -- it only looks for the format it is writing now, so the
+    /// run would render everything again and leave two pyramids interleaved on disk.
+    /// </summary>
+    public ImageFormat? DetectForeignFormat(PyramidPlan plan)
+    {
+        foreach (var candidate in ImageFormat.All)
+        {
+            if (candidate.Extension == _format.Extension)
+                continue;
+
+            for (int y = plan.NativeSlices.Y0; y <= Math.Min(plan.NativeSlices.Y1, plan.NativeSlices.Y0 + 24); y++)
+            {
+                for (int x = plan.NativeSlices.X0; x <= Math.Min(plan.NativeSlices.X1, plan.NativeSlices.X0 + 24); x++)
+                {
+                    if (File.Exists(SlicePath(plan.MaxZoom, x, y, candidate)))
+                        return candidate;
+                }
+            }
+        }
+
+        return null;
     }
 
     public PyramidPlan Plan()
@@ -313,7 +340,7 @@ public sealed class PyramidGenerator
         });
     }
 
-    private static void WriteAveraged(float[] accum, int size, string path)
+    private void WriteAveraged(float[] accum, int size, string path)
     {
         var pixels = new byte[size * size * 4];
 
@@ -333,34 +360,30 @@ public sealed class PyramidGenerator
             pixels[o + 3] = ToByte(a);
         }
 
-        using var image = Image.LoadPixelData<Rgba32>(pixels, size, size);
-        SaveAtomically(image, path);
+        ImageOutput.SaveAtomically(pixels, size, size, path, _format, _options.Quality, Backdrop);
     }
 
     private static byte ToByte(float v) => (byte)Math.Clamp((int)(v * 255f + 0.5f), 0, 255);
 
-    private static void Save(Rasterizer rasterizer, string path)
+    private void Save(Rasterizer rasterizer, string path)
     {
         var pixels = new byte[rasterizer.Width * rasterizer.Height * 4];
         rasterizer.CopyTo(pixels);
 
-        using var image = Image.LoadPixelData<Rgba32>(pixels, rasterizer.Width, rasterizer.Height);
-        SaveAtomically(image, path);
+        ImageOutput.SaveAtomically(pixels, rasterizer.Width, rasterizer.Height, path, _format,
+            _options.Quality, Backdrop);
     }
 
     /// <summary>
-    /// Writes via a temporary file and moves it into place, so that an interrupted run never
-    /// leaves a half-written slice behind for the resume to mistake for finished work.
+    /// What a format without alpha flattens onto. The configured background if it is opaque,
+    /// black otherwise -- a pyramid's background defaults to transparent, which JPEG cannot
+    /// carry, and black is what the viewer's page shows behind absent slices anyway.
     /// </summary>
-    private static void SaveAtomically(Image image, string path)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+    private System.Numerics.Vector4 Backdrop =>
+        _options.BackgroundColor.W >= 1f ? _options.BackgroundColor : new System.Numerics.Vector4(0, 0, 0, 1);
 
-        string temp = path + ".part";
-        image.SaveAsPng(temp);
-        File.Move(temp, path, overwrite: true);
-    }
+    private string SlicePath(int zoom, int x, int y) => SlicePath(zoom, x, y, _format);
 
-    private string SlicePath(int zoom, int x, int y) =>
-        Path.Combine(_outputDirectory, zoom.ToString(), x.ToString(), $"{y}.png");
+    private string SlicePath(int zoom, int x, int y, ImageFormat format) =>
+        Path.Combine(_outputDirectory, zoom.ToString(), x.ToString(), $"{y}{format.Extension}");
 }

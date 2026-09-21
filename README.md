@@ -123,7 +123,7 @@ swmaprenderer --map 1 --items lockedDownItems.json --x 1550 --y 1690 -z 2 -o tav
 `appsettings.json` can carry the path under `Render:Items` so that every run includes them;
 `--items ""` turns the overlay back off for a single run.
 
-The file is an array of objects; anything beyond these four keys is ignored, so a server's own
+The file is an array of objects; anything beyond the keys below is ignored, so a server's own
 export usually needs no reshaping.
 
 ```json
@@ -138,6 +138,41 @@ hue index, so both pass through untouched. An item with `multi` set names a mult
 `itemId - 0x4000` is looked up in `multi.idx`/`multi.mul` and expanded into its components,
 each offset from the item's own position. Without those two files in the data folder, multis
 are skipped with a warning.
+
+### Customizable houses
+
+A house built on a foundation is the one multi `multi.mul` cannot describe. The id it carries
+resolves to the blank plot a deed places — the perimeter and the front steps, nothing else.
+Every wall, floor, roof and stair the owner added lives in the server's design, so a record
+that carries one is expanded from that instead of from `multi.mul`:
+
+```json
+{
+  "itemId": 21549, "hue": 0, "multi": true,
+  "position": { "x": 2457, "y": 111, "z": 0 },
+  "design": {
+    "revision": 725, "width": 12, "height": 13,
+    "tiles": [
+      { "itemId": 1873,  "x": 2453, "y": 118, "z": 0 },
+      { "itemId": 10578, "x": 2453, "y": 117, "z": 7 }
+    ]
+  }
+}
+```
+
+It is the `design` key that decides this, not the item's type: a record carrying one is drawn
+from its tiles, and everything else with `multi` set still goes through `multi.mul`.
+
+A design's tiles are in facet coordinates already, not offsets from the house, and they cover
+the foundation too — down to the graphics an owner who changed the foundation type picked,
+which is why the design replaces the stock multi rather than sitting on top of it. The design's
+own origin tile, `itemId` 1, is the nodraw marker and is dropped. `revision`, `width` and
+`height` describe the plot and the edit that produced it; only the tiles are drawn.
+
+Storeys separate themselves: each floor's tiles carry the z it was built at, so the depth sort
+handles a three-storey house the same way it handles a hill.
+
+### How placements are used
 
 The placements are grouped by map block and merged into `StaticsFile` before it sorts each
 cell, which is what makes them behave like real statics rather than stickers: a locked-down

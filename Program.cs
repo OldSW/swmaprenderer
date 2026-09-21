@@ -29,9 +29,15 @@ try
         if (files.Items is { } items)
         {
             var s = items.Stats;
+            string expanded = string.Join(", ", new[]
+            {
+                s.Multis > 0 ? $"{s.Multis:N0} multis" : null,
+                s.Designs > 0 ? $"{s.Designs:N0} house designs" : null,
+            }.Where(part => part != null));
+
             Console.WriteLine($"Items       : {s.Items:N0} from {Path.GetFullPath(options.Items!)} " +
                               $"-> {s.Tiles:N0} statics" +
-                              (s.Multis > 0 ? $" ({s.Multis:N0} multis expanded)" : string.Empty) +
+                              (expanded.Length > 0 ? $" ({expanded} expanded)" : string.Empty) +
                               (s.OffMap + s.Unresolved > 0 ? $", {s.OffMap + s.Unresolved:N0} skipped" : string.Empty));
         }
 

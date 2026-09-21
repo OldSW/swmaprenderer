@@ -9,6 +9,7 @@ public readonly record struct ItemOverlayStats(
     int Items,
     int Tiles,
     int Multis,
+    int Designs,
     int OffMap,
     int Unresolved);
 
@@ -23,6 +24,10 @@ public readonly record struct ItemOverlayStats(
 /// Placements are grouped by map block and keyed exactly as <see cref="StaticsFile"/> keys its
 /// own, so a block is looked up once and the extra tiles sort against the real ones -- a
 /// locked-down chair resolves against the floor it stands on the same way a shipped chair does.
+///
+/// Customizable houses are the one kind of multi the client files cannot describe. multi.mul
+/// holds only the blank foundation a house deed places; every wall, floor and roof the owner
+/// built is in the server's design, so a record that carries one is expanded from that instead.
 /// </summary>
 public sealed class ItemOverlay
 {
@@ -35,6 +40,12 @@ public sealed class ItemOverlay
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
     };
+
+    /// <summary>
+    /// A house design's own origin tile. It is the nodraw graphic and carries no art, the same
+    /// marker <see cref="MultiFile"/> drops from a multi's component list.
+    /// </summary>
+    private const int DesignMarkerId = 1;
 
     private static readonly List<StaticTile> EmptyBlock = [];
 
@@ -84,7 +95,7 @@ public sealed class ItemOverlay
         string path, Action<string>? warn)
     {
         var blocks = new Dictionary<int, List<Placement>>();
-        int items = 0, tiles = 0, multiCount = 0, offMap = 0, malformed = 0, unknownMultis = 0;
+        int items = 0, tiles = 0, multiCount = 0, designCount = 0, offMap = 0, malformed = 0, unknownMultis = 0;
 
         foreach (var record in records)
         {
@@ -95,6 +106,23 @@ public sealed class ItemOverlay
             }
 
             items++;
+
+            // A design supersedes the multi it was built on: its own tiles already include the
+            // foundation, down to the graphics an owner who changed the foundation type picked,
+            // so expanding multi.mul as well would lay the stock one back over the top.
+            if (record.Design?.Tiles is { Count: > 0 } design)
+            {
+                designCount++;
+
+                foreach (var tile in design)
+                {
+                    // Unlike a multi's components, design tiles are already in facet coordinates.
+                    if (tile != null && tile.ItemId != DesignMarkerId)
+                        Add(tile.ItemId, tile.X, tile.Y, tile.Z, record.Hue);
+                }
+
+                continue;
+            }
 
             if (!record.Multi)
             {
@@ -118,7 +146,7 @@ public sealed class ItemOverlay
             }
         }
 
-        var stats = new ItemOverlayStats(items, tiles, multiCount, offMap, malformed + unknownMultis);
+        var stats = new ItemOverlayStats(items, tiles, multiCount, designCount, offMap, malformed + unknownMultis);
 
         if (offMap > 0)
         {
@@ -185,7 +213,16 @@ public sealed class ItemOverlay
         return tiles;
     }
 
-    private sealed record ItemRecord(int ItemId, int Hue, bool Multi, PositionRecord? Position);
+    private sealed record ItemRecord(int ItemId, int Hue, bool Multi, PositionRecord? Position,
+        DesignRecord? Design);
 
     private sealed record PositionRecord(int X, int Y, int Z);
+
+    /// <summary>
+    /// A customizable house as its owner left it. The export's width, height and revision
+    /// describe the plot and the edit that produced it; the tiles alone are what gets drawn.
+    /// </summary>
+    private sealed record DesignRecord(List<DesignTileRecord?>? Tiles);
+
+    private sealed record DesignTileRecord(int ItemId, int X, int Y, int Z);
 }

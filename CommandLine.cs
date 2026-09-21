@@ -211,8 +211,9 @@ public static class CommandLine
               --map-height <n>    Override facet height in tiles (default: detect)
               --tiledata-format   Auto | Legacy | Extended
               --items <file>      JSON export of a shard's items to draw on top of the
-                                  statics in the client files. It names no facet, so it
-                                  is placed on whichever --map is being rendered.
+                                  statics in the client files, customizable houses
+                                  included. It names no facet, so it is placed on
+                                  whichever --map is being rendered.
                                   Pass "" to switch off a path set in appsettings.json
           -b, --background <c>    transparent | black | white | #RRGGBB[AA]
 

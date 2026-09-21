@@ -34,6 +34,7 @@ public static class CommandLine
         ["--tiledata-format"] = "Render:TileDataFormat",
         ["--items"] = "Render:Items",
         ["--mobiles"] = "Render:Mobiles",
+        ["--pois"] = "Render:Pois",
         ["--background"] = "Render:Background",
         ["-b"] = "Render:Background",
         ["--format"] = "Render:Format",
@@ -236,6 +237,10 @@ public static class CommandLine
               --min-zoom <z>      Shallowest level (default 0, the whole facet in one slice)
               --max-zoom <z>      Deepest level (default: 44px per tile). Each level down is
                                   four times the slices, so capping this bounds the run
+              --pois <file|url>   Named places to mark on the page, and search by. A
+                                  path is embedded in it; an http(s) URL is fetched by
+                                  the page on load, so markers can follow an API
+                                  without the pyramid being re-rendered
               --threads <n>       Slices to render at once (default: every core)
               --overwrite         Re-render slices that already exist
               --dry-run           Report what would be written and stop
@@ -254,6 +259,8 @@ public static class CommandLine
 
           swmaprenderer --data ./client --map 0 --tiles ./web/map0 \
                         --region 1350,1600,1500,1750
+
+          swmaprenderer --map 1 --tiles ./web/map1 --pois https://shard.example/api/pois
 
           swmaprenderer --map 1 --items lockedDownItems.json \
                         --x 1550 --y 1650 -o britain.png

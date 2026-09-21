@@ -94,6 +94,17 @@ public sealed class RenderOptions
     /// </summary>
     public string? Mobiles { get; set; }
 
+    /// <summary>
+    /// Named places to mark on the browsable pyramid, as a file path or an <c>http(s)</c> URL.
+    ///
+    /// A path is read at generation time and embedded in the page, so the result works from a
+    /// file:// URL with nothing to serve it. A URL is left to the page, which fetches it on
+    /// load -- markers then follow the API without the pyramid being touched.
+    ///
+    /// Only the viewer uses these; a single image ignores them.
+    /// </summary>
+    public string? Pois { get; set; }
+
     /// <summary>Log per-stage timings and tile counts.</summary>
     public bool Verbose { get; set; }
 
@@ -165,6 +176,10 @@ public sealed class RenderOptions
 
     /// <summary>True when the run should write a pyramid rather than a single image.</summary>
     public bool IsTiling => !string.IsNullOrWhiteSpace(Tiles);
+
+    /// <summary>True when <see cref="Pois"/> is for the page to fetch rather than for us to read.</summary>
+    public bool PoisAreRemote =>
+        !string.IsNullOrWhiteSpace(Pois) && Tiling.PointsOfInterest.IsUrl(Pois);
 
     /// <summary>
     /// The format to encode with. An explicit --format wins; otherwise a single image follows
@@ -241,6 +256,12 @@ public sealed class RenderOptions
 
         if (!string.IsNullOrWhiteSpace(Mobiles) && !File.Exists(Mobiles))
             errors.Add($"Mobile file '{Mobiles}' does not exist.");
+
+        if (!string.IsNullOrWhiteSpace(Pois) && !PoisAreRemote && !File.Exists(Pois))
+        {
+            errors.Add($"Point-of-interest file '{Pois}' does not exist. Pass a path, or an " +
+                       $"http:// or https:// URL for the page to fetch.");
+        }
 
         if (Map is < 0 or > 5)
             errors.Add($"Map must be between 0 and 5 (got {Map}).");

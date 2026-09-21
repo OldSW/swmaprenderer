@@ -1,12 +1,32 @@
-# swmaprenderer
+# SW Map renderer
 
 Renders a region of an Ultima Online map to an image. The renderer is a CPU port of
 [CentrED#](https://github.com/kaczy93/centredsharp)'s `MapRenderer` and its `MapEffect.fx`
 shader, reading the client's `.mul` files directly.
 
 ```
-swmaprenderer --data ./vanilla_client --map 0 --x 1420 --y 1690 -w 1024 -h 768 -o britain.png
+swmaprenderer --data ./client --map 0 --x 1420 --y 1690 -w 1024 -h 768 -o britain.png
 ```
+
+## Motivation
+
+The initial idea was to have a browsable map for our shard [Schattenwelt](https://alte-schattenwelt.de). There is a lot of tooling out
+there for working with Ultima Online client files and one thing that many have in common
+they are written in C#. So we decided to use these tools as a starting base for this map
+renderer. The whole project has been built with Claude Code and Centred# as a reference implementation for
+rendering a map.
+
+## Why open source?
+
+The whole project wouldn't have been possible without other open source tools. And the UO community
+is also alot about sharing experiences else the whole freeshard scene wouldn't be possible.
+
+## Special Thanks
+
+Thanks to the [CentrED#](https://github.com/kaczy93/centredsharp) project. This gave us the initial idea
+how to begin with this whole project.
+
+Thanks to [ClassicUO](https://github.com/ClassicUO/ClassicUO). Without ClassicUO this project would not exist.
 
 ## Why a software rasterizer
 
@@ -105,9 +125,89 @@ page also shows the tile coordinates under the cursor, takes an `x, y` to jump t
 position in the URL hash so a view can be linked. Leaflet itself is loaded from a CDN, so the
 page wants a network connection the first time.
 
+Markers sit above the tiles as ordinary DOM rather than as pixels, which is what lets them be
+searched and changed without re-rendering; see [Points of interest](#points-of-interest).
+
 Tiles that were never written -- ocean, or off the edge of the facet -- simply 404 and show
 through to the page background, which is why pyramid slices default to a transparent background
 where a single image defaults to black.
+
+### Points of interest
+
+A rendered tile cannot say what a place is called. `--pois` hands the viewer a list of named
+places to mark and to search, drawn as a DOM overlay rather than into the slices -- which is
+what makes them searchable, and why moving one costs nothing.
+
+```
+swmaprenderer --map 1 --tiles ./web/map1 --pois https://shard.example/api/pois
+```
+
+The value is a path or an `http(s)` URL, and the difference is who reads it:
+
+- **A path** is read when the pyramid is written and embedded in `index.html`. The page then
+  needs nothing to serve it, so markers survive opening the file straight off disk.
+- **A URL** is left to the page, which fetches it on load. Markers follow the API without a
+  single slice being re-rendered -- but the endpoint has to send a permissive
+  `Access-Control-Allow-Origin`, and a page opened over `file://` cannot fetch cross-origin at
+  all. The viewer says so in place of the marker count rather than showing an empty map.
+
+`appsettings.json` can carry either under `Render:Pois`; `--pois ""` turns it off for a run.
+A single image ignores it -- there is no viewer to put a marker in.
+
+The canonical record is a name and a position, and everything else is optional:
+
+```json
+[
+  { "name": "Britain", "category": "town", "mapId": 1,
+    "position": { "x": 1427, "y": 1756, "z": 16 },
+    "description": "Town stone" }
+]
+```
+
+`category` is shown under the name and is searched alongside it, so `dungeon` finds every
+dungeon. `mapId` is the one field with teeth: a record that names a facet and means a different
+one is dropped, and a record that names none is placed on whichever `--map` is being rendered.
+That is the opposite default from `--items`, because a POI list is usually a whole shard's
+rather than one facet's.
+
+Since the file is normally an export rather than something written for this tool, several
+shapes are read. The array may be bare or under a `pois`, `points`, `items`, `results` or
+`data` key; the name may be `name`, `title` or `label`; the position may be `position`, `go`,
+a bare `x`/`y`/`z` on the record, or -- failing all of those -- the middle of the first
+rectangle in a `coords` list. A shard's region export therefore works unchanged:
+
+```
+swmaprenderer --map 1 --tiles ./web/map1 --pois regions.json
+```
+
+`(0, 0)` is read as *no position* rather than as the corner of the map, because that is what an
+export writes for a record that has none; a third of the region list to hand is that. Records
+skipped for that, for an empty name, for naming another facet or for falling off the map are
+counted and reported, so a file that yields nothing says why.
+
+The `pois.json` in this repository is the shard's eighteen town stones -- `Townstone` items in
+`lockedDownItems.json`, which all carry that same name -- each named after the region it stands
+in, from `regions.json`.
+
+### Finding a place
+
+The viewer's box takes either `x, y` or a name. Typing a name lists up to twelve matches with
+their coordinates; arrow keys and Enter pick one, which centres the map on it and opens its
+marker. Matching ignores case and accents and folds `ß` to `ss`, so `stutzpunkt` finds
+*Stützpunkt*, and a name that *starts* with what was typed outranks one that merely contains it.
+
+Markers are drawn only where the view can see them, nearest the middle of the screen first and
+capped at 400, because more than that is a smear rather than information. Names appear beside
+the dots once a tile is wide enough to read them by -- or at any zoom when there are fewer than
+forty in view, since eighteen towns on a whole facet are exactly what you want named.
+
+Under the box is a checkbox per `category`, with how many carry it, so dungeons can be hidden
+while banks stay. The list is discovered from the data rather than declared -- whatever kinds
+of place the file turned out to hold are the kinds offered -- sorted by name, with the bucket
+for records that named no category last. Unchecking a kind hides its markers *and* takes it out
+of the search, since being sent to a place you have just said you do not care about is not
+helpful. Data with no categories at all collapses to a single row, which is then just labelled
+`markers`.
 
 ## Shard items
 
@@ -336,6 +436,7 @@ list. The frequently used ones:
 | `--nodraw` | Include the placeholder tiles the client hides |
 | `--prefer-texmaps` | Use terrain textures even where land art would do |
 | `--items <file>` | JSON export of shard items to draw over the client's statics |
+| `--pois <file\|url>` | Named places to mark on the viewer and search by |
 | `--min-z`, `--max-z` | Restrict the z range |
 | `-v, --verbose` | Report the view range, tile counts and timings |
 | `--tiles <dir>` | Write a browsable tile pyramid here instead of one image |
@@ -364,7 +465,7 @@ size the height is trusted and the width re-derived — `vanilla_client`'s `map0
 | `Assets/` | `.mul` readers: tiledata, art, texmaps, hues, multis, animations and the body tables, plus the memory-mapped file and index primitives |
 | `Map/` | Terrain and statics layers, the shard item and mobile overlays, equipment layer order, facet dimensions, and `MapScene` — the data and visibility rules the geometry is built against |
 | `Rendering/` | The port: `IsoProjection`, `LandObject`, `StaticObject`, `MobileObject`, `MapRenderer`, `MapEffect`, `Rasterizer` |
-| `Tiling/` | `SliceGrid` (canvas geometry), `PyramidGenerator`, `LeafletViewer` |
+| `Tiling/` | `SliceGrid` (canvas geometry), `PyramidGenerator`, `PointsOfInterest`, `LeafletViewer` |
 
 `MapScene` replaces CentrED's `CEDGame.MapManager` singleton, which the geometry code reaches
 through for tile data and options. Passing it explicitly keeps that code testable.

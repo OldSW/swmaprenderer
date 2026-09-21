@@ -145,6 +145,12 @@ static int RunTiling(MapScene scene, RenderOptions options)
 
     var format = options.ResolvedFormat;
 
+    // Read before anything is rendered. A marker file that cannot be parsed should fail the run
+    // in its first second rather than after an hour of slices, and --dry-run should catch it.
+    var pois = !string.IsNullOrWhiteSpace(options.Pois) && !options.PoisAreRemote
+        ? PointsOfInterest.Load(options.Pois, options.Map, files.Dimensions)
+        : null;
+
     Console.WriteLine($"Facet       : map{options.Map} ({grid.Map.Width}x{grid.Map.Height} tiles)");
     Console.WriteLine($"Format      : {format.Name}" +
                       (format.IsLossy ? $" at quality {options.Quality}" : " (lossless)"));
@@ -154,6 +160,18 @@ static int RunTiling(MapScene scene, RenderOptions options)
     Console.WriteLine($"Levels      : {plan.MinZoom}..{plan.MaxZoom} of 0..{grid.MaxZoom} " +
                       $"(level {plan.MaxZoom} is {grid.TilePixelsAtLevel(plan.MaxZoom):0.##}px per tile)");
     Console.WriteLine($"Slices      : {plan.NativeSliceCount:N0} to render, {plan.TotalSliceCount:N0} in total");
+
+    if (options.PoisAreRemote)
+        Console.WriteLine($"Markers     : fetched by the page from {options.Pois}");
+    else if (pois is { } loaded)
+        Console.WriteLine($"Markers     : {loaded.Stats.Kept:N0} from {Path.GetFullPath(options.Pois!)}{DescribeSkips(loaded.Stats)}");
+
+    if (pois is { Stats.Kept: 0, Stats.Records: > 0 })
+    {
+        Warn($"none of the {pois.Stats.Records:N0} records in '{options.Pois}' became a marker on " +
+             $"map{options.Map}. A record needs a name and a position, and one naming a facet has " +
+             $"to name this one.");
+    }
 
     // Order of magnitude, from measured constants. Cost follows the slice's pixel area rather
     // than the slice count: --max-zoom changes how many slices there are, while --zoom changes
@@ -188,7 +206,8 @@ static int RunTiling(MapScene scene, RenderOptions options)
     Directory.CreateDirectory(directory);
 
     var result = generator.Generate(options.Verbose ? Console.WriteLine : null);
-    string page = LeafletViewer.Write(grid, plan, options.Map, directory, options.ResolvedFormat);
+    string page = LeafletViewer.Write(grid, plan, options.Map, directory, options.ResolvedFormat,
+        pois?.Items, options.PoisAreRemote ? options.Pois : null);
 
     Console.WriteLine();
     Console.WriteLine($"Rendered {result.Rendered:N0} slices, downsampled {result.Downsampled:N0}, " +
@@ -198,6 +217,20 @@ static int RunTiling(MapScene scene, RenderOptions options)
     // it survives the spaces and non-ASCII that a path picks up from --tiles.
     Console.WriteLine($"Open {new Uri(page).AbsoluteUri}");
     return 0;
+}
+
+/// <summary>What the marker file offered that did not end up on the page, and why.</summary>
+static string DescribeSkips(PoiStats stats)
+{
+    var reasons = new[]
+    {
+        stats.OtherMap > 0 ? $"{stats.OtherMap:N0} on other facets" : null,
+        stats.Unnamed > 0 ? $"{stats.Unnamed:N0} unnamed" : null,
+        stats.NoPosition > 0 ? $"{stats.NoPosition:N0} with no position" : null,
+        stats.OffMap > 0 ? $"{stats.OffMap:N0} off the map" : null,
+    }.Where(reason => reason != null);
+
+    return reasons.Any() ? $" ({string.Join(", ", reasons)} skipped)" : string.Empty;
 }
 
 static string FormatSize(double megabytes) =>

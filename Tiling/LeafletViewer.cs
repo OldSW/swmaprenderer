@@ -106,6 +106,13 @@ public static class LeafletViewer
             padding: 6px 9px; border-radius: 4px; border: 1px solid #34343c;
           }
           .readout b { color: #9fd0ff; font-weight: 600; }
+          .credit {
+            font: 11px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+            padding: 0 2px;
+            text-shadow: 0 0 3px #101014, 0 0 3px #101014;
+          }
+          .leaflet-container .credit a { color: #7c7c88; text-decoration: none; }
+          .leaflet-container .credit a:hover { color: #9fd0ff; text-decoration: underline; }
           .find { width: 15em; }
           .find input[type=text] {
             font: 12px ui-monospace, Menlo, monospace; flex: 1; min-width: 0;
@@ -250,6 +257,22 @@ public static class LeafletViewer
         function tilePixels() {
           return 2 * CFG.halfTile * Math.pow(2, map.getZoom() - CFG.gridMaxZoom);
         }
+
+        // A standing remark in the corner. Its own control rather than Leaflet's attribution,
+        // which this page turns off. Controls in a bottom corner are inserted above whatever is
+        // already there, so adding this before the readout is what leaves it at the very bottom.
+        const credit = L.control({ position: 'bottomleft' });
+        credit.onAdd = function () {
+          const div = L.DomUtil.create('div', 'credit');
+          div.innerHTML =
+            '<a href="https://github.com/OldSW/swmaprenderer" target="_blank" rel="noopener">' +
+            'built with SW Map Renderer</a>';
+          // Without this a click on the link is also a click on the map, which the popup and
+          // marker handlers would act on.
+          L.DomEvent.disableClickPropagation(div);
+          return div;
+        };
+        credit.addTo(map);
 
         const readout = L.control({ position: 'bottomleft' });
         readout.onAdd = function () {

@@ -3,8 +3,7 @@ name: Build
 on:
   push:
     branches: [main]
-    tags:
-      - '[0-9]+.[0-9]+.[0-9]+*'
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 permissions:
@@ -71,7 +70,7 @@ jobs:
 
       # Upload the plain files, not an archive: upload-artifact always zips what
       # it is given, so handing it a .tar.gz/.zip would produce a zip-in-a-zip.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: swmaprenderer-${{ matrix.rid }}
           path: staging/swmaprenderer-${{ matrix.rid }}

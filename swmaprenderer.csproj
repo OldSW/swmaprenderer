@@ -24,6 +24,14 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!-- Reference material for a shard operator, not part of this program: it compiles
+             against a UO server's own assemblies, so the default **/*.cs glob has to let go
+             of it. -->
+        <Compile Remove="Example/**/*.cs"/>
+        <None Include="Example/**/*.cs"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <None Update="appsettings.json">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>

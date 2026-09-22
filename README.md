@@ -380,6 +380,35 @@ One thing the client does that this does not: it culls layers an occluder is exp
 completely, on top of the paint order, because some art paints outside the bounds of the item
 meant to cover it. Without that a boot or a legging occasionally peeks out from under a robe.
 
+## Producing the exports
+
+`--items` and `--mobiles` read what a server chose to write out, and the renderer takes no
+position on how that happens. `Example/ExportItemsMobilesCommand.cs` is the command our shard
+uses, kept here as a worked example of the shape the two files are expected to have. It is not
+compiled into this program — it builds against a UO server's own assemblies, so
+`swmaprenderer.csproj` drops it from the compile glob — and it is written against a
+RunUO-lineage codebase, so treat it as a reference to adapt rather than a drop-in.
+
+It writes `items.json` and `mobiles.json` into the server's web directory, both on `WorldLoad`
+and on demand as `exportitemsmobiles`, an administrator command. What it leaves out is the
+interesting part, and each omission matches something documented above:
+
+- **Items inside containers are skipped** (`item.Parent != null`), which is the filtering the
+  section on shard items says belongs in the export rather than in the renderer.
+- **A `HouseFoundation` carries its current design**, with tile positions made absolute and the
+  multi bit masked off, which is exactly what [Customizable houses](#customizable-houses)
+  expects. Tiles the client would not draw are dropped, except the first, which is the origin
+  marker the renderer then discards itself.
+- **Equipment stops at the layers a mobile is actually drawn wearing** — the backpack, bank box
+  and anything outside the valid layer range never reach the paperdoll.
+- **Player mobiles are never exported.** They stay in the world after logout, so writing them
+  out would publish where people log off.
+
+One facet is exported, hard-coded rather than taken as an argument, and neither file records
+which one — matching the renderer's own rule that items and mobiles land on whichever `--map`
+is being drawn. Names, titles and type names are written too; the renderer ignores them, but
+they make the files worth reading on their own.
+
 ## Image formats
 
 `--format` picks the encoder: `png`, `jpg`, `gif`, `webp` or `webp-lossless`. A single image
@@ -466,6 +495,7 @@ size the height is trusted and the width re-derived — `vanilla_client`'s `map0
 | `Map/` | Terrain and statics layers, the shard item and mobile overlays, equipment layer order, facet dimensions, and `MapScene` — the data and visibility rules the geometry is built against |
 | `Rendering/` | The port: `IsoProjection`, `LandObject`, `StaticObject`, `MobileObject`, `MapRenderer`, `MapEffect`, `Rasterizer` |
 | `Tiling/` | `SliceGrid` (canvas geometry), `PyramidGenerator`, `PointsOfInterest`, `LeafletViewer` |
+| `Example/` | Not built: the server-side command that writes the `--items` and `--mobiles` files |
 
 `MapScene` replaces CentrED's `CEDGame.MapManager` singleton, which the geometry code reaches
 through for tile data and options. Passing it explicitly keeps that code testable.

@@ -262,7 +262,7 @@ public static class CommandLine
 
           swmaprenderer --map 1 --tiles ./web/map1 --pois https://shard.example/api/pois
 
-          swmaprenderer --map 1 --items lockedDownItems.json \
+          swmaprenderer --map 1 --items items.json \
                         --x 1550 --y 1650 -o britain.png
         """;
 }

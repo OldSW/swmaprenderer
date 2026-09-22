@@ -35,6 +35,11 @@ to the centre crop of a larger one, and a 32-tile slice to its four 16-tile slic
 together. If you change the projection, the rasterizer, or slice geometry, verify that way
 (render twice, compare pixels) rather than assuming.
 
+`Example/` is dropped from the compile glob by `swmaprenderer.csproj` and is not part of the
+program. It holds the server-side command that produces the `--items` and `--mobiles` JSON, and
+compiles against a UO server's assemblies, not against anything here — do not try to make it
+build.
+
 Rendering anything requires a folder of client `.mul` files, which is **not in the repository**
 (`client/` and `vanilla_client/` are gitignored). Without one, only `--help` and `--dry-run`
 paths are exercisable.

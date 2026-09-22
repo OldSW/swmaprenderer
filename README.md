@@ -186,8 +186,8 @@ skipped for that, for an empty name, for naming another facet or for falling off
 counted and reported, so a file that yields nothing says why.
 
 The `pois.json` in this repository is the shard's eighteen town stones -- `Townstone` items in
-`lockedDownItems.json`, which all carry that same name -- each named after the region it stands
-in, from `regions.json`.
+the item export, which all carry that same name -- each named after the region it stands in,
+from `regions.json`.
 
 ### Finding a place
 
@@ -217,7 +217,7 @@ save, so a map rendered from client files alone shows an empty town. `--items <f
 JSON export of those items back in.
 
 ```
-swmaprenderer --map 1 --items lockedDownItems.json --x 1550 --y 1690 -z 2 -o tavern.png
+swmaprenderer --map 1 --items items.json --x 1550 --y 1690 -z 2 -o tavern.png
 ```
 
 `appsettings.json` can carry the path under `Render:Items` so that every run includes them;

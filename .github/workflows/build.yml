@@ -22,12 +22,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,  rid: linux-x64,   archive: tar.gz }
-          - { os: ubuntu-latest,  rid: linux-arm64, archive: tar.gz }
-          - { os: windows-latest, rid: win-x64,     archive: zip }
-          - { os: windows-latest, rid: win-arm64,   archive: zip }
-          - { os: macos-latest,   rid: osx-x64,     archive: tar.gz }
-          - { os: macos-latest,   rid: osx-arm64,   archive: tar.gz }
+          - { os: ubuntu-latest,  rid: linux-x64 }
+          - { os: ubuntu-latest,  rid: linux-arm64 }
+          - { os: windows-latest, rid: win-x64 }
+          - { os: windows-latest, rid: win-arm64 }
+          - { os: macos-latest,   rid: osx-x64 }
+          - { os: macos-latest,   rid: osx-arm64 }
 
     steps:
       - uses: actions/checkout@v7
@@ -67,22 +67,13 @@ jobs:
           mkdir -p "$staging"
           cp -r publish/${{ matrix.rid }}/. "$staging/"
           cp README.md LICENSE "$staging/"
-          chmod +x "$staging/swmaprenderer" 2>/dev/null || true
 
-      - name: Archive (tar.gz)
-        if: matrix.archive == 'tar.gz'
-        shell: bash
-        run: tar -czf "swmaprenderer-${{ matrix.rid }}.tar.gz" -C staging "swmaprenderer-${{ matrix.rid }}"
-
-      - name: Archive (zip)
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: Compress-Archive -Path "staging/swmaprenderer-${{ matrix.rid }}" -DestinationPath "swmaprenderer-${{ matrix.rid }}.zip"
-
+      # Upload the plain files, not an archive: upload-artifact always zips what
+      # it is given, so handing it a .tar.gz/.zip would produce a zip-in-a-zip.
       - uses: actions/upload-artifact@v4
         with:
           name: swmaprenderer-${{ matrix.rid }}
-          path: swmaprenderer-${{ matrix.rid }}.${{ matrix.archive }}
+          path: staging/swmaprenderer-${{ matrix.rid }}
           if-no-files-found: error
 
   release:
@@ -94,9 +85,25 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
-          merge-multiple: true
+
+      # Artifact downloads do not carry the executable bit, so restore it before
+      # packaging. These are the real release assets, uploaded verbatim by
+      # action-gh-release — no second layer of zipping.
+      - name: Archive
+        shell: bash
+        run: |
+          mkdir -p dist
+          for dir in artifacts/*/; do
+            name="$(basename "$dir")"
+            case "$name" in
+              *-win-*) (cd artifacts && zip -qr "../dist/$name.zip" "$name") ;;
+              *)       chmod +x "$dir/swmaprenderer"
+                       tar -czf "dist/$name.tar.gz" -C artifacts "$name" ;;
+            esac
+          done
+          ls -l dist
 
       - uses: softprops/action-gh-release@v3
         with:
-          files: artifacts/*
+          files: dist/*
           generate_release_notes: true

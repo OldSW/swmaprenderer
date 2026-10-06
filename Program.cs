@@ -147,9 +147,13 @@ static int RunTiling(MapScene scene, RenderOptions options)
 
     // Read before anything is rendered. A marker file that cannot be parsed should fail the run
     // in its first second rather than after an hour of slices, and --dry-run should catch it.
-    var pois = !string.IsNullOrWhiteSpace(options.Pois) && !options.PoisAreRemote
-        ? PointsOfInterest.Load(options.Pois, options.Map, files.Dimensions)
-        : null;
+    var poiSources = options.ResolvePoiSources();
+    var embedded = poiSources
+        .Where(source => source.Kind == PoiSourceKind.File)
+        .Select(source => (Source: source, Pois: PointsOfInterest.Load(source.Location, options.Map, files.Dimensions, source)))
+        .ToList();
+    var fetched = poiSources.Where(source => source.Kind == PoiSourceKind.Url).ToList();
+    var pois = embedded.Count > 0 ? PointsOfInterest.Combine([.. embedded.Select(e => e.Pois)]) : null;
 
     Console.WriteLine($"Facet       : map{options.Map} ({grid.Map.Width}x{grid.Map.Height} tiles)");
     Console.WriteLine($"Format      : {format.Name}" +
@@ -161,17 +165,22 @@ static int RunTiling(MapScene scene, RenderOptions options)
                       $"(level {plan.MaxZoom} is {grid.TilePixelsAtLevel(plan.MaxZoom):0.##}px per tile)");
     Console.WriteLine($"Slices      : {plan.NativeSliceCount:N0} to render, {plan.TotalSliceCount:N0} in total");
 
-    if (options.PoisAreRemote)
-        Console.WriteLine($"Markers     : fetched by the page from {options.Pois}" +
-                          (options.PoisRefresh > 0 ? $", every {options.PoisRefresh}s" : ""));
-    else if (pois is { } loaded)
-        Console.WriteLine($"Markers     : {loaded.Stats.Kept:N0} from {Path.GetFullPath(options.Pois!)}{DescribeSkips(loaded.Stats)}");
-
-    if (pois is { Stats.Kept: 0, Stats.Records: > 0 })
+    foreach (var (source, loaded) in embedded)
     {
-        Warn($"none of the {pois.Stats.Records:N0} records in '{options.Pois}' became a marker on " +
-             $"map{options.Map}. A record needs a name and a position, and one naming a facet has " +
-             $"to name this one.");
+        Console.WriteLine($"Markers     : {loaded.Stats.Kept:N0} from {Path.GetFullPath(source.Location)}{DescribeSkips(loaded.Stats)}");
+
+        if (loaded.Stats is { Kept: 0, Records: > 0 })
+        {
+            Warn($"none of the {loaded.Stats.Records:N0} records in '{source.Location}' became a marker on " +
+                 $"map{options.Map}. A record needs a name and a position, and one naming a facet has " +
+                 $"to name this one.");
+        }
+    }
+
+    foreach (var source in fetched)
+    {
+        Console.WriteLine($"Markers     : fetched by the page from {source.Location}" +
+                          (source.RefreshSeconds > 0 ? $", every {source.RefreshSeconds}s" : ""));
     }
 
     // Order of magnitude, from measured constants. Cost follows the slice's pixel area rather
@@ -208,7 +217,7 @@ static int RunTiling(MapScene scene, RenderOptions options)
 
     var result = generator.Generate(options.Verbose ? Console.WriteLine : null);
     string page = LeafletViewer.Write(grid, plan, options.Map, directory, options.ResolvedFormat,
-        pois?.Items, options.PoisAreRemote ? options.Pois : null, pois?.Types, options.PoisRefresh);
+        pois, fetched);
 
     Console.WriteLine();
     Console.WriteLine($"Rendered {result.Rendered:N0} slices, downsampled {result.Downsampled:N0}, " +

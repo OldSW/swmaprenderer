@@ -114,6 +114,24 @@ public sealed class RenderOptions
     /// </summary>
     public int PoisRefresh { get; set; }
 
+    /// <summary>
+    /// A JSON file listing several marker sources, each stating whether it is a file to embed
+    /// or a URL for the page to fetch -- and, for a URL, how often. When set it replaces
+    /// <see cref="Pois"/> and <see cref="PoisRefresh"/> altogether, which describe the one
+    /// source this generalises. See <see cref="Tiling.PoiSources"/>.
+    /// </summary>
+    public string? PoisConfig { get; set; }
+
+    /// <summary>Every marker source this run has, from whichever of the two ways they were given.</summary>
+    /// <exception cref="InvalidDataException">The configuration file is unreadable or wrong.</exception>
+    public IReadOnlyList<Tiling.PoiSource> ResolvePoiSources()
+    {
+        if (!string.IsNullOrWhiteSpace(PoisConfig))
+            return Tiling.PoiSources.Read(PoisConfig);
+
+        return string.IsNullOrWhiteSpace(Pois) ? [] : [Tiling.PoiSources.Single(Pois, PoisRefresh)];
+    }
+
     /// <summary>Log per-stage timings and tile counts.</summary>
     public bool Verbose { get; set; }
 
@@ -185,9 +203,6 @@ public sealed class RenderOptions
 
     /// <summary>True when the run should write a pyramid rather than a single image.</summary>
     public bool IsTiling => !string.IsNullOrWhiteSpace(Tiles);
-
-    /// <summary>A floor, so that a typo does not turn every open page into a request storm.</summary>
-    private const int MinPoisRefresh = 5;
 
     /// <summary>True when <see cref="Pois"/> is for the page to fetch rather than for us to read.</summary>
     public bool PoisAreRemote =>
@@ -269,17 +284,35 @@ public sealed class RenderOptions
         if (!string.IsNullOrWhiteSpace(Mobiles) && !File.Exists(Mobiles))
             errors.Add($"Mobile file '{Mobiles}' does not exist.");
 
-        if (!string.IsNullOrWhiteSpace(Pois) && !PoisAreRemote && !File.Exists(Pois))
+        if (!string.IsNullOrWhiteSpace(PoisConfig))
         {
-            errors.Add($"Point-of-interest file '{Pois}' does not exist. Pass a path, or an " +
-                       $"http:// or https:// URL for the page to fetch.");
+            try
+            {
+                foreach (var source in Tiling.PoiSources.Read(PoisConfig))
+                {
+                    if (source.Kind == Tiling.PoiSourceKind.File && !File.Exists(source.Location))
+                        errors.Add($"Point-of-interest file '{source.Location}' (from '{PoisConfig}') does not exist.");
+                }
+            }
+            catch (InvalidDataException e)
+            {
+                errors.AddRange(e.Message.Split(Environment.NewLine));
+            }
         }
+        else
+        {
+            if (!string.IsNullOrWhiteSpace(Pois) && !PoisAreRemote && !File.Exists(Pois))
+            {
+                errors.Add($"Point-of-interest file '{Pois}' does not exist. Pass a path, or an " +
+                           $"http:// or https:// URL for the page to fetch.");
+            }
 
-        if (PoisRefresh != 0 && PoisRefresh < MinPoisRefresh)
-            errors.Add($"PoisRefresh is a number of seconds, 0 for never or at least {MinPoisRefresh} (got {PoisRefresh}).");
-        else if (PoisRefresh != 0 && !PoisAreRemote)
-            errors.Add("PoisRefresh needs --pois to be an http:// or https:// URL; a file is embedded " +
-                       "when the pyramid is written and the page cannot see it change.");
+            if (PoisRefresh != 0 && PoisRefresh < Tiling.PoiSources.MinRefreshSeconds)
+                errors.Add($"PoisRefresh is a number of seconds, 0 for never or at least {Tiling.PoiSources.MinRefreshSeconds} (got {PoisRefresh}).");
+            else if (PoisRefresh != 0 && !PoisAreRemote)
+                errors.Add("PoisRefresh needs --pois to be an http:// or https:// URL; a file is embedded " +
+                           "when the pyramid is written and the page cannot see it change.");
+        }
 
         if (Map is < 0 or > 5)
             errors.Add($"Map must be between 0 and 5 (got {Map}).");

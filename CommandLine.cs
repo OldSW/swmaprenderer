@@ -35,6 +35,7 @@ public static class CommandLine
         ["--items"] = "Render:Items",
         ["--mobiles"] = "Render:Mobiles",
         ["--pois"] = "Render:Pois",
+        ["--pois-config"] = "Render:PoisConfig",
         ["--pois-refresh"] = "Render:PoisRefresh",
         ["--background"] = "Render:Background",
         ["-b"] = "Render:Background",
@@ -244,6 +245,9 @@ public static class CommandLine
                                   without the pyramid being re-rendered
               --pois-refresh <s>  Re-fetch a --pois URL every <s> seconds (min 5; default 0,
                                   once on load). Not valid for a file
+              --pois-config <file>
+                                  A JSON list of marker sources, each a file to embed or a
+                                  URL to fetch (with its own refresh). Replaces --pois
               --threads <n>       Slices to render at once (default: every core)
               --overwrite         Re-render slices that already exist
               --dry-run           Report what would be written and stop

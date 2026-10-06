@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using SwMapRenderer.Map;
 
@@ -65,9 +67,18 @@ public sealed class PointsOfInterest
         source.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
         source.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
-    public static PointsOfInterest Load(string path, int mapIndex, MapDimensions dimensions)
+    /// <param name="source">What the configuration says about this file beyond where it is:
+    /// which array holds the records, what to call ones that name no category, which facet
+    /// ones that name none are on, and looks for categories.</param>
+    public static PointsOfInterest Load(string path, int mapIndex, MapDimensions dimensions,
+        PoiSource? source = null)
     {
-        var (records, types) = ReadRecords(path);
+        var (records, types) = ReadRecords(path, source?.Key, source?.Fields);
+
+        // The configuration has the last word on how a category looks, since it is written
+        // for this shard's map and the file may be somebody else's export.
+        foreach (var (category, type) in source?.Types ?? new Dictionary<string, PoiType>())
+            types[category] = type;
 
         var kept = new List<Poi>(records.Count);
         int otherMap = 0, unnamed = 0, noPosition = 0, offMap = 0;
@@ -77,7 +88,7 @@ public sealed class PointsOfInterest
             if (record == null)
                 continue;
 
-            if (record.Facet is { } facet && facet != mapIndex)
+            if ((record.Facet ?? source?.MapId) is { } facet && facet != mapIndex)
             {
                 otherMap++;
                 continue;
@@ -103,23 +114,50 @@ public sealed class PointsOfInterest
             }
 
             kept.Add(new Poi(name, x, y, z,
-                First(record.Category, record.Type),
+                First(record.Category, record.Type, source?.Category),
                 First(record.Description, record.Desc)));
         }
 
-        // Sorted so that the page this ends up embedded in is stable across runs: a resume that
-        // re-renders nothing should leave index.html byte-identical too.
-        kept.Sort(static (a, b) =>
-        {
-            int byName = string.CompareOrdinal(a.Name, b.Name);
-            return byName != 0 ? byName : a.X != b.X ? a.X - b.X : a.Y - b.Y;
-        });
+        Sort(kept);
 
         return new PointsOfInterest(kept,
             new PoiStats(records.Count, kept.Count, otherMap, unnamed, noPosition, offMap), types);
     }
 
-    private static (List<PoiRecord?> Records, Dictionary<string, PoiType> Types) ReadRecords(string path)
+    /// <summary>
+    /// Sorted so that the page this ends up embedded in is stable across runs: a resume that
+    /// re-renders nothing should leave index.html byte-identical too.
+    /// </summary>
+    private static void Sort(List<Poi> pois) =>
+        pois.Sort(static (a, b) =>
+        {
+            int byName = string.CompareOrdinal(a.Name, b.Name);
+            return byName != 0 ? byName : a.X != b.X ? a.X - b.X : a.Y - b.Y;
+        });
+
+    /// <summary>
+    /// Several files as one. A category two of them both describe takes the look the later one
+    /// gives it, the way a later configuration entry overrides an earlier one.
+    /// </summary>
+    public static PointsOfInterest Combine(IReadOnlyList<PointsOfInterest> parts)
+    {
+        var items = parts.SelectMany(p => p.Items).ToList();
+        Sort(items);
+
+        var types = new Dictionary<string, PoiType>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in parts)
+            foreach (var (category, type) in part.Types)
+                types[category] = type;
+
+        var stats = new PoiStats(
+            parts.Sum(p => p.Stats.Records), parts.Sum(p => p.Stats.Kept),
+            parts.Sum(p => p.Stats.OtherMap), parts.Sum(p => p.Stats.Unnamed),
+            parts.Sum(p => p.Stats.NoPosition), parts.Sum(p => p.Stats.OffMap));
+
+        return new PointsOfInterest(items, stats, types);
+    }
+
+    private static (List<PoiRecord?> Records, Dictionary<string, PoiType> Types) ReadRecords(string path, string? key, IReadOnlyDictionary<string, string>? fields)
     {
         try
         {
@@ -133,12 +171,17 @@ public sealed class PointsOfInterest
                 AllowTrailingCommas = true,
             });
 
-            var array = Unwrap(document.RootElement)
+            var array = Unwrap(document.RootElement, key)
                         ?? throw new InvalidDataException(
                             $"'{path}' holds {Describe(document.RootElement)} where an array of points " +
-                            $"of interest was expected, either bare or under a \"pois\" key.");
+                            $"of interest was expected, either bare or under a \"pois\" key" +
+                            (key != null ? $" or the configured \"{key}\" key." : "."));
 
-            return (array.Deserialize<List<PoiRecord?>>(ReadOptions) ?? [], ReadTypes(document.RootElement));
+            var records = fields is { Count: > 0 }
+                ? Remap(array, fields).Deserialize<List<PoiRecord?>>(ReadOptions)
+                : array.Deserialize<List<PoiRecord?>>(ReadOptions);
+
+            return (records ?? [], ReadTypes(document.RootElement));
         }
         catch (JsonException e)
         {
@@ -153,14 +196,131 @@ public sealed class PointsOfInterest
     }
 
     /// <summary>
-    /// The <c>types</c> block of an enveloped file:
+    /// What a source's <c>fields</c> block may name: the record's own properties, and the three
+    /// coordinates for an API that keeps them apart rather than in a position object.
+    /// </summary>
+    public static readonly IReadOnlySet<string> MappableFields = new HashSet<string>
+    {
+        "name", "category", "description", "mapId", "position", "x", "y", "z",
+    };
+
+    /// <summary>
+    /// Rewrites each record into the canonical shape according to <paramref name="fields"/>,
+    /// whose values are dotted paths into the record (<c>"pos.east"</c>, <c>"loc.0"</c>).
+    /// A property that is mapped is taken from its path alone -- one that is not there leaves
+    /// the record without it, rather than quietly falling back to a same-named property that
+    /// means something else.
+    /// </summary>
+    private static JsonArray Remap(JsonElement array, IReadOnlyDictionary<string, string> fields)
+    {
+        var result = new JsonArray();
+
+        foreach (var element in array.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+            {
+                result.Add(null);
+                continue;
+            }
+
+            var record = JsonNode.Parse(element.GetRawText())!.AsObject();
+
+            foreach (string name in (string[])["name", "category", "description"])
+            {
+                if (fields.TryGetValue(name, out string? path))
+                    record[name] = Pluck(element, path) is { } v ? JsonNode.Parse(v.GetRawText()) : null;
+            }
+
+            if (fields.TryGetValue("mapId", out string? mapPath))
+                record["mapId"] = Pluck(element, mapPath) is { } m && Whole(m) is { } id ? id : null;
+
+            if (fields.TryGetValue("position", out string? positionPath))
+                record["position"] = Pluck(element, positionPath) is { } p ? JsonNode.Parse(p.GetRawText()) : null;
+
+            if (fields.ContainsKey("x") || fields.ContainsKey("y") || fields.ContainsKey("z"))
+            {
+                var position = record["position"] as JsonObject;
+                var assembled = new JsonObject();
+
+                foreach (string axis in (string[])["x", "y", "z"])
+                {
+                    JsonNode? value = fields.TryGetValue(axis, out string? axisPath)
+                        ? (Pluck(element, axisPath) is { } a && Whole(a) is { } n ? n : null)
+                        : position?[axis]?.DeepClone();
+
+                    assembled[axis] = value;
+                }
+
+                record["position"] = assembled;
+            }
+
+            // Coordinates arrive as whatever the API's author found convenient: 12, "12", 12.5.
+            if (record["position"] is JsonObject point)
+            {
+                foreach (string axis in (string[])["x", "y", "z"])
+                {
+                    if (point[axis] is { } raw && Whole(raw) is { } whole)
+                        point[axis] = whole;
+                    else
+                        point.Remove(axis);
+                }
+            }
+
+            result.Add(record);
+        }
+
+        return result;
+    }
+
+    /// <summary>The value at a dotted path, or null when any step of it is missing.</summary>
+    private static JsonElement? Pluck(JsonElement element, string path)
+    {
+        var current = element;
+
+        foreach (string step in path.Split('.'))
+        {
+            if (current.ValueKind == JsonValueKind.Object && current.TryGetProperty(step, out var next))
+                current = next;
+            else if (current.ValueKind == JsonValueKind.Array &&
+                     int.TryParse(step, NumberStyles.None, CultureInfo.InvariantCulture, out int i) &&
+                     i < current.GetArrayLength())
+                current = current[i];
+            else
+                return null;
+        }
+
+        return current.ValueKind == JsonValueKind.Null ? null : current;
+    }
+
+    private static int? Whole(JsonNode node)
+    {
+        using var document = JsonDocument.Parse(node.ToJsonString());
+        return Whole(document.RootElement);
+    }
+
+    /// <summary>A number, or text that is one, rounded to a whole tile -- null if it is neither.</summary>
+    private static int? Whole(JsonElement value)
+    {
+        double number;
+
+        if (value.ValueKind == JsonValueKind.Number)
+            number = value.GetDouble();
+        else if (value.ValueKind != JsonValueKind.String ||
+                 !double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number))
+            return null;
+
+        return double.IsFinite(number) ? (int)Math.Round(number) : null;
+    }
+
+    /// <summary>
+    /// The <c>types</c> block of an enveloped file, or of a source in the configuration:
     /// <c>{ "town": { "icon": "icons/town.png", "color": "#ffd479" } }</c>. A bare string is
     /// taken as the icon. The colour is what the dot is painted when there is no icon, and it
     /// is left unchecked here: the page validates it, because it is the page that puts it
     /// into a style. A type with neither is left out rather than failing the file -- it only
     /// costs the marker its look.
     /// </summary>
-    private static Dictionary<string, PoiType> ReadTypes(JsonElement root)
+    internal static Dictionary<string, PoiType> ReadTypes(JsonElement root)
     {
         var types = new Dictionary<string, PoiType>(StringComparer.OrdinalIgnoreCase);
 
@@ -196,7 +356,7 @@ public sealed class PointsOfInterest
             ? First(value.GetString())
             : null;
 
-    private static JsonElement? Unwrap(JsonElement root)
+    private static JsonElement? Unwrap(JsonElement root, string? key)
     {
         if (root.ValueKind == JsonValueKind.Array)
             return root;
@@ -204,9 +364,13 @@ public sealed class PointsOfInterest
         if (root.ValueKind != JsonValueKind.Object)
             return null;
 
-        foreach (string key in (string[])["pois", "points", "items", "results", "data"])
+        // The configured key goes first: an API with a "players" array may well have an "items"
+        // one too, and the configuration is what says which of them is meant.
+        string[] keys = key != null ? [key] : ["pois", "points", "items", "results", "data"];
+
+        foreach (string candidate in keys)
         {
-            if (root.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.Array)
+            if (root.TryGetProperty(candidate, out var value) && value.ValueKind == JsonValueKind.Array)
                 return value;
         }
 

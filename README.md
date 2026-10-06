@@ -192,6 +192,69 @@ export writes for a record that has none; a third of the region list to hand is 
 skipped for that, for an empty name, for naming another facet or for falling off the map are
 counted and reported, so a file that yields nothing says why.
 
+#### Several sources
+
+`--pois` names one source. `--pois-config <file>` (`Render:PoisConfig`) names as many as you
+like in a JSON file, each stating whether it is a file to embed or a URL for the page to fetch
+-- and, for a URL, how often:
+
+```json
+{
+  "sources": [
+    { "name": "towns", "type": "file", "path": "pois.json" },
+    { "name": "live",  "type": "url",  "url": "https://shard.example/api/pois", "refresh": 30 },
+    { "name": "quests", "type": "url", "url": "https://shard.example/api/quests" }
+  ]
+}
+```
+
+- `type` is `file` or `url`, and may be left out: it follows whichever of `path` and `url` is
+  present. When given it has to agree with them -- a `file` carrying a `url` is an error.
+- `refresh` is seconds between fetches, 0 or absent for once on load, at least 5 otherwise.
+  It is an error on a `file`, which is embedded when the pyramid is written.
+- A relative `path` is relative to the configuration file, not to the working directory.
+- The list may be bare, without the `{ "sources": }` wrapper. Every problem in it is reported
+  at once, before any slice is rendered.
+
+Each source is itself a list in any of the shapes above, with its own `types` block. All of
+them end up on one map, searchable together, with one checkbox per category across the lot.
+Where two sources define a look for the same category, the later one in the list wins -- the
+order is the configuration's, not the order the responses arrive in. Each URL polls on its own
+schedule, and one that is down does not hold up the others: the page names the source it could
+not reach. When set, `--pois-config` replaces `--pois` and `--pois-refresh`.
+
+A source that is somebody else's API rather than a list written for this tool can say how to
+read it, because the API cannot be asked to change:
+
+- `key` is the property holding the array of records, for a response that has several
+  (`"players"`), and is tried before the usual `pois`, `points`, `items`, `results` and `data`.
+  Everything else in the response is ignored.
+- `category` is what records that name none are called, `mapId` the facet records that name
+  none are on (so a source for another facet is dropped rather than drawn on this one), and
+  `types` gives looks to categories, in the same form as the `types` block of a file.
+  A `types` entry here wins over one in the source's own response.
+
+- `fields` says where in a record each property is, as dotted paths (`"pos.east"`, `"loc.0"`).
+  It can map `name`, `category`, `description`, `mapId`, `position` (the path of an object
+  with `x`, `y`, `z`), and `x`, `y`, `z` separately for an API that keeps the coordinates
+  apart:
+
+  ```json
+  "fields": { "name": "who.nick", "x": "loc.east", "y": "loc.north", "z": "loc.alt" }
+  ```
+
+  A mapped property is read from its path alone: if the path is not there, the record has
+  none, rather than falling back to a same-named property that means something else. `x`, `y`
+  and `z` win over `position` axis by axis. Coordinates may be numbers or numeric text, and
+  fractions are rounded to the tile. An unknown name in `fields` is an error, listed with the
+  ones that exist.
+
+The shard's status API is read this way: its `players` array has a `name` and a `position`
+each, and its `cities` and counters are none of the map's business. `poi-sources.json` in this
+repository wires it up next to the town stones, polling every 15 seconds, with players in
+blue. The API names no facet and only lists who is online, so `mapId` is the facet you put them
+on -- a player who is actually on another facet is drawn on this one, at their coordinates.
+
 #### Icons per type
 
 A marker is a yellow dot unless its category says otherwise. A type can name an `icon`, or
@@ -499,6 +562,7 @@ list. The frequently used ones:
 | `--prefer-texmaps` | Use terrain textures even where land art would do |
 | `--items <file>` | JSON export of shard items to draw over the client's statics |
 | `--pois <file\|url>` | Named places to mark on the viewer and search by |
+| `--pois-config <file>` | JSON list of marker sources, each a file or a URL with its own refresh; replaces `--pois` |
 | `--pois-refresh <s>` | Re-fetch a `--pois` URL every `<s>` seconds (min 5; default 0, once on load) |
 | `--min-z`, `--max-z` | Restrict the z range |
 | `-v, --verbose` | Report the view range, tile counts and timings |

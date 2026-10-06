@@ -36,14 +36,11 @@ public static class LeafletViewer
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <param name="pois">Markers to embed in the page. Null when there are none, or when the
-    /// page is to fetch them from <paramref name="poiUrl"/> instead.</param>
-    /// <param name="poiTypes">Icon and colour per marker category, embedded alongside the markers.</param>
-    /// <param name="poiUrl">Endpoint the page fetches markers from on load.</param>
-    /// <param name="poiRefreshSeconds">Interval at which the page fetches it again; 0 for never.</param>
+    /// <param name="embedded">Markers read at generation time, to embed in the page. Null when
+    /// no source was a file.</param>
+    /// <param name="fetched">Sources the page fetches itself, each on its own interval.</param>
     public static string Write(SliceGrid grid, PyramidPlan plan, int mapIndex, string outputDirectory,
-        ImageFormat format, IReadOnlyList<Poi>? pois = null, string? poiUrl = null,
-        IReadOnlyDictionary<string, PoiType>? poiTypes = null, int poiRefreshSeconds = 0)
+        ImageFormat format, PointsOfInterest? embedded = null, IReadOnlyList<PoiSource>? fetched = null)
     {
         var config = new
         {
@@ -69,13 +66,16 @@ public static class LeafletViewer
             tilesPerSlice = grid.TilesPerSlice,
             extension = format.Extension,
             format = format.Name,
-            poiUrl,
-            poiRefreshSeconds = poiUrl == null ? 0 : poiRefreshSeconds,
+            poiSources = (fetched ?? []).Select(s => new
+            {
+                name = s.Name, url = s.Location, refreshSeconds = s.RefreshSeconds,
+                key = s.Key, category = s.Category, mapId = s.MapId, types = s.Types, fields = s.Fields,
+            }),
         };
 
         string html = Template
             .Replace("/*__CONFIG__*/null", JsonSerializer.Serialize(config, ConfigOptions))
-            .Replace("/*__POIS__*/null", Markers(pois, poiTypes));
+            .Replace("/*__POIS__*/null", Markers(embedded));
 
         string path = Path.Combine(outputDirectory, FileName);
         File.WriteAllText(path, html);
@@ -86,16 +86,14 @@ public static class LeafletViewer
     /// The same envelope the file and an API use, <c>{ types, pois }</c>, so that the page has
     /// one reader whether the markers were embedded or fetched.
     /// </summary>
-    private static string Markers(IReadOnlyList<Poi>? pois, IReadOnlyDictionary<string, PoiType>? poiTypes)
+    private static string Markers(PointsOfInterest? embedded)
     {
-        if (pois is not { Count: > 0 })
+        if (embedded is not { Items.Count: > 0 })
             return "null";
 
-        var types = poiTypes ?? new Dictionary<string, PoiType>();
-
-        var lines = pois.Select(p => "  " + JsonSerializer.Serialize(p, PoiOptions));
+        var lines = embedded.Items.Select(p => "  " + JsonSerializer.Serialize(p, PoiOptions));
         return "{" + Environment.NewLine +
-               "\"types\": " + JsonSerializer.Serialize(types, PoiOptions) + "," + Environment.NewLine +
+               "\"types\": " + JsonSerializer.Serialize(embedded.Types, PoiOptions) + "," + Environment.NewLine +
                "\"pois\": [" + Environment.NewLine + string.Join("," + Environment.NewLine, lines) +
                Environment.NewLine + "]" + Environment.NewLine + "}";
     }
@@ -205,8 +203,8 @@ public static class LeafletViewer
         <script>
         const CFG = /*__CONFIG__*/null;
 
-        // Markers embedded at generation time, from a --pois file. Null when the page is to
-        // fetch them from CFG.poiUrl instead, or when the run had none.
+        // Markers embedded at generation time, from every file source merged. Null when no
+        // source was a file; the ones the page fetches itself are listed in CFG.poiSources.
         const POIS = /*__POIS__*/null;
 
         // A transparent 1x1 PNG, served for slices that were never written whatever the tiles
@@ -325,13 +323,14 @@ public static class LeafletViewer
         // record shape is not ours to dictate, so everything goes through one reader. What it
         // needs from a record is a name and somewhere to put it; the rest is decoration.
         // How each category looks, folded so that "Town" and "town" are one type. It comes from
-        // the "types" block of the same envelope that carries the markers.
+        // the "types" block of the same envelope that carries the markers, so each source brings
+        // its own and they are merged once all are in.
         let looks = new Map();
 
         function readTypes(raw) {
           const types = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw.types : null;
-          looks = new Map();
-          if (!types || typeof types !== 'object') return;
+          const out = new Map();
+          if (!types || typeof types !== 'object') return out;
 
           for (const [key, t] of Object.entries(types)) {
             const o = typeof t === 'string' ? { icon: t } : t || {};
@@ -339,11 +338,13 @@ public static class LeafletViewer
             // The colour goes into a style attribute, so only something the browser itself
             // accepts as a colour gets that far.
             const color = text(o.color);
-            looks.set(fold(key.trim()), {
+            out.set(fold(key.trim()), {
               icon,
               color: color && CSS.supports('color', color) ? color : '',
             });
           }
+
+          return out;
         }
 
         const lookOf = category => (category && looks.get(fold(category))) || {};
@@ -355,21 +356,50 @@ public static class LeafletViewer
           return `<i${dot ? ' class="dot"' : ''}${color ? ` style="--c:${esc(color)}"` : ''}></i>`;
         }
 
-        function readPois(raw) {
-          readTypes(raw);
+        // The value at a dotted path ("pos.east", "loc.0"), or undefined where any step is missing.
+        const pluck = (o, path) => String(path).split('.')
+          .reduce((v, k) => v == null ? undefined : v[k], o);
+
+        // A mapped property is taken from its path alone, so that one that is not there leaves
+        // the record without it rather than falling back to a same-named property that means
+        // something else. Mirrors PointsOfInterest.Remap, which does the same for a file.
+        function remap(r, f) {
+          const c = { ...r };
+          for (const k of ['name', 'category', 'description', 'mapId'])
+            if (f[k]) c[k] = pluck(r, f[k]);
+
+          if (f.position) c.position = pluck(r, f.position);
+
+          if (f.x || f.y || f.z) {
+            const base = c.position && typeof c.position === 'object' ? c.position : {};
+            const axis = k => f[k] ? pluck(r, f[k]) : base[k];
+            c.position = { x: axis('x'), y: axis('y'), z: axis('z') };
+          }
+
+          return c;
+        }
+
+        // src is what the configuration says about a fetched source: which array to read, and
+        // the category, facet and looks to assume for what the API itself does not say.
+        function readPois(raw, src = {}) {
+          const types = readTypes(raw);
+          for (const [key, t] of readTypes({ types: src.types }))
+            types.set(key, t);
+
           const list = Array.isArray(raw) ? raw
             : !raw || typeof raw !== 'object' ? []
-            : ['pois', 'points', 'items', 'results', 'data']
+            : (src.key ? [src.key] : ['pois', 'points', 'items', 'results', 'data'])
                 .map(k => raw[k]).find(Array.isArray) || [];
 
           const out = [];
-          for (const r of list) {
-            if (!r || typeof r !== 'object') continue;
+          for (const record of list) {
+            if (!record || typeof record !== 'object') continue;
+            const r = src.fields ? remap(record, src.fields) : record;
 
             // A record that names a facet and means a different one is not ours to draw. One
             // that names none is taken to be on the facet this pyramid covers.
             const facet = typeof r.mapId === 'number' ? r.mapId
-              : typeof r.map === 'number' ? r.map : null;
+              : typeof r.map === 'number' ? r.map : src.mapId ?? null;
             if (facet !== null && facet !== CFG.mapIndex) continue;
 
             const name = text(r.name) || text(r.title) || text(r.label);
@@ -378,7 +408,7 @@ public static class LeafletViewer
             const at = place(r.position) || place(r.go) || place(r) || middle(r.coords);
             if (!at) continue;
 
-            const category = text(r.category) || text(r.type);
+            const category = text(r.category) || text(r.type) || text(src.category);
             out.push({
               name, category,
               x: at.x, y: at.y, z: at.z,
@@ -387,8 +417,7 @@ public static class LeafletViewer
             });
           }
 
-          out.sort((a, b) => a.name.localeCompare(b.name));
-          return out;
+          return { pois: out, types };
         }
 
         const text = v => typeof v === 'string' ? v.trim() : '';
@@ -643,7 +672,14 @@ public static class LeafletViewer
             `<span class="of">${esc(solo ? 'markers' : k.category || 'uncategorised')}</span>` +
             `<span class="n">${k.count}</span></label>`).join('');
 
-          $kinds.classList.remove('off');
+          // A source that has never answered is said so, by name when there is more than one to
+          // tell apart. One that answered once and then failed keeps its markers and stays quiet.
+          for (const src of sources.filter(src => src.failure)) {
+            $kinds.insertAdjacentHTML('beforeend', '<div class="note">markers unavailable' +
+              (sources.length > 1 ? ` from ${esc(src.name)}` : '') + ` (${esc(src.failure)})</div>`);
+          }
+
+          $kinds.classList.toggle('off', $kinds.innerHTML === '');
           syncKinds();
         }
 
@@ -665,67 +701,73 @@ public static class LeafletViewer
 
         map.on('moveend zoomend', drawPois);
 
-        async function fetchPois() {
+        // Where the markers come from, in the order their looks are merged: what was embedded
+        // first, then each fetched source as the configuration listed them, so a later one
+        // overrides an earlier one however the responses happen to arrive.
+        const sources = [
+          ...(POIS ? [{ name: 'embedded', data: readPois(POIS), failure: '' }] : []),
+          ...CFG.poiSources.map(s => ({ ...s, data: null, failure: '', attempted: false })),
+        ];
+
+        function rebuild() {
+          pois = [];
+          looks = new Map();
+
+          for (const src of sources) {
+            if (!src.data) continue;
+            pois.push(...src.data.pois);
+            for (const [category, look] of src.data.types) looks.set(category, look);
+          }
+
+          pois.sort((a, b) => a.name.localeCompare(b.name));
+          listKinds();
+          drawPois();
+        }
+
+        async function fetchSource(src) {
           // no-store: a refresh that is answered from the browser's cache refreshes nothing.
-          const response = await fetch(CFG.poiUrl, {
+          const response = await fetch(src.url, {
             headers: { Accept: 'application/json' }, cache: 'no-store',
           });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           return response.json();
         }
 
-        function showPois(raw) {
-          pois = readPois(raw);
+        async function pollSource(src) {
+          // A background tab has nobody to show it to; the first tick after it is looked at
+          // again catches up. The first fetch happens regardless.
+          if (!document.hidden || !src.attempted) {
+            src.attempted = true;
 
-          if (pois.length === 0) {
-            // An API that now returns nothing means nothing is there, not that it failed.
-            kinds = [];
-            syncKinds();
-            $kinds.classList.add('off');
-            drawPois();
-            return;
-          }
-
-          listKinds();
-          drawPois();
-        }
-
-        async function loadPois() {
-          let raw = POIS;
-
-          if (!raw && CFG.poiUrl) {
             try {
-              raw = await fetchPois();
+              // An API that now returns nothing means nothing is there, not that it failed, so
+              // an empty answer replaces the markers like any other.
+              src.data = readPois(await fetchSource(src), src);
+              src.failure = '';
+              rebuild();
             } catch (e) {
-              // A page served from file:// cannot fetch cross-origin, and neither can one whose
-              // API sends no CORS header, so say what happened rather than showing nothing.
-              $kinds.innerHTML = `<div class="note">markers unavailable (${esc(e.message)})</div>`;
-              $kinds.classList.remove('off');
+              if (src.data) {
+                // Keep what is on the map. Blanking it because one poll failed would make every
+                // blip in the API look like the shard had lost its towns.
+                console.warn(`marker refresh from ${src.url} failed:`, e.message);
+              } else {
+                // A page served from file:// cannot fetch cross-origin, and neither can one whose
+                // API sends no CORS header, so say what happened rather than showing nothing.
+                src.failure = e.message;
+                rebuild();
+              }
             }
           }
-
-          if (raw) showPois(raw);
 
           // Chained rather than setInterval, so a slow API cannot pile requests up behind
-          // itself, and the first failure does not end the refreshing -- the shard may just
-          // be restarting.
-          if (CFG.poiUrl && CFG.poiRefreshSeconds > 0 && !POIS) setTimeout(refreshPois, CFG.poiRefreshSeconds * 1000);
+          // itself, and a failure does not end the refreshing -- the shard may just be
+          // restarting.
+          if (src.refreshSeconds > 0) setTimeout(() => pollSource(src), src.refreshSeconds * 1000);
         }
 
-        async function refreshPois() {
-          // A background tab has nobody to show it to; the first tick after it is looked at
-          // again catches up.
-          if (!document.hidden) {
-            try {
-              showPois(await fetchPois());
-            } catch (e) {
-              // Keep what is on the map. Blanking it because one poll failed would make every
-              // blip in the API look like the shard had lost its towns.
-              console.warn('marker refresh failed:', e.message);
-            }
-          }
-
-          setTimeout(refreshPois, CFG.poiRefreshSeconds * 1000);
+        function loadPois() {
+          if (POIS) rebuild();
+          for (const src of sources) if (src.url) pollSource(src);
         }
 
         // --- shareable position ------------------------------------------------------------

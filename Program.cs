@@ -253,11 +253,37 @@ static string Format(TimeSpan span) =>
 
 static RenderOptions LoadOptions(string[] args)
 {
-    var configuration = new ConfigurationBuilder()
-        .SetBasePath(AppContext.BaseDirectory)
-        .AddJsonFile("appsettings.json", optional: true)
+    var normalized = CommandLine.Normalize(args);
+
+    // The config file's own path can come from the command line or the environment, so those
+    // are read first, on their own, to find out which file to put between appsettings.json and
+    // them. Like --data, a relative path is resolved against the working directory.
+    string? configFile = new ConfigurationBuilder()
         .AddEnvironmentVariables("SWMAP_")
-        .AddCommandLine(CommandLine.Normalize(args), CommandLine.SwitchMappings)
+        .AddCommandLine(normalized, CommandLine.SwitchMappings)
+        .Build()[CommandLine.ConfigKey];
+
+    var builder = new ConfigurationBuilder()
+        .SetBasePath(AppContext.BaseDirectory)
+        .AddJsonFile("appsettings.json", optional: true);
+
+    if (!string.IsNullOrEmpty(configFile))
+    {
+        string path = Path.GetFullPath(configFile);
+        if (!File.Exists(path))
+            throw new OptionsException([$"Config file '{path}' does not exist."]);
+
+        // The file holds the options bare, without the "Render" section appsettings.json wraps
+        // them in, so it is read on its own and re-keyed underneath that section.
+        var file = new ConfigurationBuilder().AddJsonFile(path, optional: false).Build();
+        builder.AddInMemoryCollection(file.AsEnumerable()
+            .Where(kv => kv.Value != null)
+            .Select(kv => new KeyValuePair<string, string?>("Render:" + kv.Key, kv.Value)));
+    }
+
+    var configuration = builder
+        .AddEnvironmentVariables("SWMAP_")
+        .AddCommandLine(normalized, CommandLine.SwitchMappings)
         .Build();
 
     try

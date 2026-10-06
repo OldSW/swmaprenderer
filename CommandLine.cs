@@ -9,8 +9,14 @@ namespace SwMapRenderer;
 /// </summary>
 public static class CommandLine
 {
+    public const string ConfigKey = "Config";
+
     public static readonly Dictionary<string, string> SwitchMappings = new()
     {
+        // Not a Render option: it names the file the rest are read from, so LoadOptions picks it
+        // out ahead of the real build. It lives here only so Normalize accepts the switch.
+        ["--config"] = ConfigKey,
+        ["-c"] = ConfigKey,
         ["--data"] = "Render:DataPath",
         ["-d"] = "Render:DataPath",
         ["--map"] = "Render:Map",
@@ -197,6 +203,8 @@ public static class CommandLine
           swmaprenderer [options]
 
         Options:
+          -c, --config <file>     JSON file supplying any of the options below (see
+                                  Configuration); switches given here still win
           -d, --data <dir>        Folder holding the client's .mul files
           -m, --map <0-5>         Facet to render (map{N}.mul)
           -x, --x <tile>          Tile the view is centred on
@@ -258,8 +266,8 @@ public static class CommandLine
 
               --help              Show this help
 
-        Defaults come from appsettings.json and may also be set through the environment as
-        SWMAP_Render__<Name>. Command-line switches win over both.
+        Defaults come from appsettings.json, then the --config file, then the environment
+        as SWMAP_Render__<Name>. Command-line switches win over all of them.
 
         Examples:
           swmaprenderer --data ./client --map 0 --x 1420 --y 1690 -w 1024 -h 768 -o britain.png

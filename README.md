@@ -544,9 +544,15 @@ warns and names the format already there.
 
 ## Configuration
 
-Defaults live in `appsettings.json` under `Render`, can be overridden by environment variables
-(`SWMAP_Render__X=1420`), and command-line switches win over both. Run `--help` for the full
-list. The frequently used ones:
+Defaults live in `appsettings.json` under `Render`. A file named with `-c, --config <file>` is
+layered over it, environment variables (`SWMAP_Render__X=1420`) over that, and command-line
+switches win over everything. Run `--help` for the full list. The frequently used ones:
+
+Every switch has a config key: the long name in PascalCase, e.g. `--min-zoom` is `MinZoom`,
+`--out` is `Output` and `--data` is `DataPath`. `config.example.json` lists them all with their
+defaults; copy it, delete what you do not need, and run with `--config mine.json`. Boolean keys
+take `true`/`false`, so `--no-statics` is `"ShowStatics": false`. The file holds the keys at
+the top level, with no `Render` wrapper (that is only for `appsettings.json`).
 
 | Switch | Meaning |
 | --- | --- |

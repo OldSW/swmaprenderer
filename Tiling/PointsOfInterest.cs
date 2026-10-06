@@ -7,6 +7,9 @@ namespace SwMapRenderer.Tiling;
 /// <summary>One marker, in the canonical shape the viewer consumes.</summary>
 public readonly record struct Poi(string Name, int X, int Y, int Z, string? Category, string? Description);
 
+/// <summary>How markers of one category look: a picture, or failing that the colour of the dot.</summary>
+public readonly record struct PoiType(string? Icon, string? Color);
+
 /// <summary>What <see cref="PointsOfInterest.Load"/> made of the file, for the run's log.</summary>
 public readonly record struct PoiStats(
     int Records,
@@ -44,10 +47,17 @@ public sealed class PointsOfInterest
     public IReadOnlyList<Poi> Items { get; }
     public PoiStats Stats { get; }
 
-    private PointsOfInterest(IReadOnlyList<Poi> items, PoiStats stats)
+    /// <summary>
+    /// Appearance per category, from the file's <c>types</c> block. Keyed case-insensitively,
+    /// because a category is typed by hand in one place and by a script in another.
+    /// </summary>
+    public IReadOnlyDictionary<string, PoiType> Types { get; }
+
+    private PointsOfInterest(IReadOnlyList<Poi> items, PoiStats stats, IReadOnlyDictionary<string, PoiType> types)
     {
         Items = items;
         Stats = stats;
+        Types = types;
     }
 
     /// <summary>Whether the configured source is fetched by the page rather than read here.</summary>
@@ -57,7 +67,7 @@ public sealed class PointsOfInterest
 
     public static PointsOfInterest Load(string path, int mapIndex, MapDimensions dimensions)
     {
-        List<PoiRecord?> records = ReadRecords(path);
+        var (records, types) = ReadRecords(path);
 
         var kept = new List<Poi>(records.Count);
         int otherMap = 0, unnamed = 0, noPosition = 0, offMap = 0;
@@ -106,10 +116,10 @@ public sealed class PointsOfInterest
         });
 
         return new PointsOfInterest(kept,
-            new PoiStats(records.Count, kept.Count, otherMap, unnamed, noPosition, offMap));
+            new PoiStats(records.Count, kept.Count, otherMap, unnamed, noPosition, offMap), types);
     }
 
-    private static List<PoiRecord?> ReadRecords(string path)
+    private static (List<PoiRecord?> Records, Dictionary<string, PoiType> Types) ReadRecords(string path)
     {
         try
         {
@@ -128,7 +138,7 @@ public sealed class PointsOfInterest
                             $"'{path}' holds {Describe(document.RootElement)} where an array of points " +
                             $"of interest was expected, either bare or under a \"pois\" key.");
 
-            return array.Deserialize<List<PoiRecord?>>(ReadOptions) ?? [];
+            return (array.Deserialize<List<PoiRecord?>>(ReadOptions) ?? [], ReadTypes(document.RootElement));
         }
         catch (JsonException e)
         {
@@ -141,6 +151,50 @@ public sealed class PointsOfInterest
                 $"{{ name, position: {{ x, y, z }} }} objects.", e);
         }
     }
+
+    /// <summary>
+    /// The <c>types</c> block of an enveloped file:
+    /// <c>{ "town": { "icon": "icons/town.png", "color": "#ffd479" } }</c>. A bare string is
+    /// taken as the icon. The colour is what the dot is painted when there is no icon, and it
+    /// is left unchecked here: the page validates it, because it is the page that puts it
+    /// into a style. A type with neither is left out rather than failing the file -- it only
+    /// costs the marker its look.
+    /// </summary>
+    private static Dictionary<string, PoiType> ReadTypes(JsonElement root)
+    {
+        var types = new Dictionary<string, PoiType>(StringComparer.OrdinalIgnoreCase);
+
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("types", out var block) ||
+            block.ValueKind != JsonValueKind.Object)
+            return types;
+
+        foreach (var entry in block.EnumerateObject())
+        {
+            var value = entry.Value;
+            string? icon = null, color = null;
+
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                icon = First(value.GetString());
+            }
+            else if (value.ValueKind == JsonValueKind.Object)
+            {
+                icon = Text(value, "icon");
+                color = Text(value, "color");
+            }
+
+            if (icon != null || color != null)
+                types[entry.Name.Trim()] = new PoiType(icon, color);
+        }
+
+        return types;
+    }
+
+    private static string? Text(JsonElement element, string property) =>
+        element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
+            ? First(value.GetString())
+            : null;
 
     private static JsonElement? Unwrap(JsonElement root)
     {

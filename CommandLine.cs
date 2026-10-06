@@ -35,6 +35,7 @@ public static class CommandLine
         ["--items"] = "Render:Items",
         ["--mobiles"] = "Render:Mobiles",
         ["--pois"] = "Render:Pois",
+        ["--pois-refresh"] = "Render:PoisRefresh",
         ["--background"] = "Render:Background",
         ["-b"] = "Render:Background",
         ["--format"] = "Render:Format",
@@ -241,6 +242,8 @@ public static class CommandLine
                                   path is embedded in it; an http(s) URL is fetched by
                                   the page on load, so markers can follow an API
                                   without the pyramid being re-rendered
+              --pois-refresh <s>  Re-fetch a --pois URL every <s> seconds (min 5; default 0,
+                                  once on load). Not valid for a file
               --threads <n>       Slices to render at once (default: every core)
               --overwrite         Re-render slices that already exist
               --dry-run           Report what would be written and stop

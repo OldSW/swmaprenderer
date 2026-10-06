@@ -151,6 +151,13 @@ The value is a path or an `http(s)` URL, and the difference is who reads it:
   `Access-Control-Allow-Origin`, and a page opened over `file://` cannot fetch cross-origin at
   all. The viewer says so in place of the marker count rather than showing an empty map.
 
+By default a URL is fetched once, on load. `--pois-refresh <seconds>` (`Render:PoisRefresh`)
+has the open page fetch it again on that interval, so a marker that moves on the shard moves
+on the map without anyone reloading. The floor is 5 seconds, and it is an error with a file,
+which is embedded and cannot change under the page. A poll that fails leaves the markers as
+they were and tries again next time; one that succeeds replaces them, keeping whichever types
+were switched off. Hidden tabs skip their polls.
+
 `appsettings.json` can carry either under `Render:Pois`; `--pois ""` turns it off for a run.
 A single image ignores it -- there is no viewer to put a marker in.
 
@@ -184,6 +191,32 @@ swmaprenderer --map 1 --tiles ./web/map1 --pois regions.json
 export writes for a record that has none; a third of the region list to hand is that. Records
 skipped for that, for an empty name, for naming another facet or for falling off the map are
 counted and reported, so a file that yields nothing says why.
+
+#### Icons per type
+
+A marker is a yellow dot unless its category says otherwise. A type can name an `icon`, or
+failing that a `color` for the dot, in a `types` block beside the list, so the file becomes
+`{ types, pois }`:
+
+```json
+{
+  "types": {
+    "town":    { "icon": "icons/town.png" },
+    "dungeon": { "icon": "https://shard.example/icons/dungeon.png" },
+    "shop":    { "color": "#6cc4ff" }
+  },
+  "pois": [ { "name": "Britain", "category": "town", "position": { "x": 1427, "y": 1756, "z": 16 } } ]
+}
+```
+
+The icon is a URL the *browser* resolves, so a relative one is relative to `index.html` -- put
+the images in the pyramid folder -- and it is neither read nor copied at generation time. A
+bare string (`"town": "icons/town.png"`) is accepted for `{ "icon": ... }`. Type names match
+categories regardless of case. An icon wins over a colour; a type with only a colour keeps the
+dot and paints it, and an unlisted category keeps the default yellow. A colour is any CSS colour
+the browser accepts (`#6cc4ff`, `crimson`, `rgb(...)`); one it rejects is ignored. The icon or
+colour also appears beside the type's checkbox. It works the same whether the file is embedded or fetched from a URL,
+since both carry the same envelope. A bare array has no place for `types` and so no icons.
 
 The `pois.json` in this repository is the shard's eighteen town stones -- `Townstone` items in
 the item export, which all carry that same name -- each named after the region it stands in,
@@ -466,6 +499,7 @@ list. The frequently used ones:
 | `--prefer-texmaps` | Use terrain textures even where land art would do |
 | `--items <file>` | JSON export of shard items to draw over the client's statics |
 | `--pois <file\|url>` | Named places to mark on the viewer and search by |
+| `--pois-refresh <s>` | Re-fetch a `--pois` URL every `<s>` seconds (min 5; default 0, once on load) |
 | `--min-z`, `--max-z` | Restrict the z range |
 | `-v, --verbose` | Report the view range, tile counts and timings |
 | `--tiles <dir>` | Write a browsable tile pyramid here instead of one image |

@@ -105,6 +105,15 @@ public sealed class RenderOptions
     /// </summary>
     public string? Pois { get; set; }
 
+    /// <summary>
+    /// Seconds between the page re-fetching <see cref="Pois"/>, or 0 to fetch once on load.
+    ///
+    /// Only a URL has anything to refresh: a file is embedded when the pyramid is written, and
+    /// the page has no way to see it change. Asking for a refresh of one is an error rather
+    /// than a silent no-op, because the likely cause is a forgotten URL.
+    /// </summary>
+    public int PoisRefresh { get; set; }
+
     /// <summary>Log per-stage timings and tile counts.</summary>
     public bool Verbose { get; set; }
 
@@ -176,6 +185,9 @@ public sealed class RenderOptions
 
     /// <summary>True when the run should write a pyramid rather than a single image.</summary>
     public bool IsTiling => !string.IsNullOrWhiteSpace(Tiles);
+
+    /// <summary>A floor, so that a typo does not turn every open page into a request storm.</summary>
+    private const int MinPoisRefresh = 5;
 
     /// <summary>True when <see cref="Pois"/> is for the page to fetch rather than for us to read.</summary>
     public bool PoisAreRemote =>
@@ -262,6 +274,12 @@ public sealed class RenderOptions
             errors.Add($"Point-of-interest file '{Pois}' does not exist. Pass a path, or an " +
                        $"http:// or https:// URL for the page to fetch.");
         }
+
+        if (PoisRefresh != 0 && PoisRefresh < MinPoisRefresh)
+            errors.Add($"PoisRefresh is a number of seconds, 0 for never or at least {MinPoisRefresh} (got {PoisRefresh}).");
+        else if (PoisRefresh != 0 && !PoisAreRemote)
+            errors.Add("PoisRefresh needs --pois to be an http:// or https:// URL; a file is embedded " +
+                       "when the pyramid is written and the page cannot see it change.");
 
         if (Map is < 0 or > 5)
             errors.Add($"Map must be between 0 and 5 (got {Map}).");

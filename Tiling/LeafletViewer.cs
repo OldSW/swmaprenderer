@@ -38,9 +38,12 @@ public static class LeafletViewer
 
     /// <param name="pois">Markers to embed in the page. Null when there are none, or when the
     /// page is to fetch them from <paramref name="poiUrl"/> instead.</param>
+    /// <param name="poiTypes">Icon and colour per marker category, embedded alongside the markers.</param>
     /// <param name="poiUrl">Endpoint the page fetches markers from on load.</param>
+    /// <param name="poiRefreshSeconds">Interval at which the page fetches it again; 0 for never.</param>
     public static string Write(SliceGrid grid, PyramidPlan plan, int mapIndex, string outputDirectory,
-        ImageFormat format, IReadOnlyList<Poi>? pois = null, string? poiUrl = null)
+        ImageFormat format, IReadOnlyList<Poi>? pois = null, string? poiUrl = null,
+        IReadOnlyDictionary<string, PoiType>? poiTypes = null, int poiRefreshSeconds = 0)
     {
         var config = new
         {
@@ -67,25 +70,34 @@ public static class LeafletViewer
             extension = format.Extension,
             format = format.Name,
             poiUrl,
+            poiRefreshSeconds = poiUrl == null ? 0 : poiRefreshSeconds,
         };
 
         string html = Template
             .Replace("/*__CONFIG__*/null", JsonSerializer.Serialize(config, ConfigOptions))
-            .Replace("/*__POIS__*/null", Markers(pois));
+            .Replace("/*__POIS__*/null", Markers(pois, poiTypes));
 
         string path = Path.Combine(outputDirectory, FileName);
         File.WriteAllText(path, html);
         return path;
     }
 
-    private static string Markers(IReadOnlyList<Poi>? pois)
+    /// <summary>
+    /// The same envelope the file and an API use, <c>{ types, pois }</c>, so that the page has
+    /// one reader whether the markers were embedded or fetched.
+    /// </summary>
+    private static string Markers(IReadOnlyList<Poi>? pois, IReadOnlyDictionary<string, PoiType>? poiTypes)
     {
         if (pois is not { Count: > 0 })
             return "null";
 
+        var types = poiTypes ?? new Dictionary<string, PoiType>();
+
         var lines = pois.Select(p => "  " + JsonSerializer.Serialize(p, PoiOptions));
-        return "[" + Environment.NewLine + string.Join("," + Environment.NewLine, lines) +
-               Environment.NewLine + "]";
+        return "{" + Environment.NewLine +
+               "\"types\": " + JsonSerializer.Serialize(types, PoiOptions) + "," + Environment.NewLine +
+               "\"pois\": [" + Environment.NewLine + string.Join("," + Environment.NewLine, lines) +
+               Environment.NewLine + "]" + Environment.NewLine + "}";
     }
 
     private const string Template = """
@@ -157,9 +169,18 @@ public static class LeafletViewer
           .leaflet-div-icon.poi { background: none; border: none; }
           .poi i {
             position: absolute; left: -4px; top: -4px; width: 7px; height: 7px;
-            border-radius: 50%; background: #ffd479; border: 1px solid #14141a;
-            box-shadow: 0 0 0 1px rgba(255, 212, 121, 0.4);
+            border-radius: 50%; background: var(--c, #ffd479); border: 1px solid #14141a;
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--c, #ffd479) 40%, transparent);
           }
+          .find .kinds i.dot {
+            flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c);
+          }
+          .poi img {
+            position: absolute; left: 0; top: 0; max-width: 28px; max-height: 28px;
+            transform: translate(-50%, -50%); filter: drop-shadow(0 0 2px #000);
+          }
+          .poi img + span { left: 16px; }
+          .find .kinds img { height: 14px; width: auto; flex: none; }
           .poi span {
             position: absolute; left: 7px; top: -9px; white-space: nowrap; pointer-events: none;
             font: 11px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif; color: #f6ead0;
@@ -303,7 +324,39 @@ public static class LeafletViewer
         // Markers may be embedded in this page or fetched from a shard's API, and an API's own
         // record shape is not ours to dictate, so everything goes through one reader. What it
         // needs from a record is a name and somewhere to put it; the rest is decoration.
+        // How each category looks, folded so that "Town" and "town" are one type. It comes from
+        // the "types" block of the same envelope that carries the markers.
+        let looks = new Map();
+
+        function readTypes(raw) {
+          const types = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw.types : null;
+          looks = new Map();
+          if (!types || typeof types !== 'object') return;
+
+          for (const [key, t] of Object.entries(types)) {
+            const o = typeof t === 'string' ? { icon: t } : t || {};
+            const icon = text(o.icon);
+            // The colour goes into a style attribute, so only something the browser itself
+            // accepts as a colour gets that far.
+            const color = text(o.color);
+            looks.set(fold(key.trim()), {
+              icon,
+              color: color && CSS.supports('color', color) ? color : '',
+            });
+          }
+        }
+
+        const lookOf = category => (category && looks.get(fold(category))) || {};
+
+        // The marker's picture: the type's icon, else the dot, painted in the type's colour.
+        function glyph(category, dot) {
+          const { icon, color } = lookOf(category);
+          if (icon) return `<img src="${esc(icon)}" alt="">`;
+          return `<i${dot ? ' class="dot"' : ''}${color ? ` style="--c:${esc(color)}"` : ''}></i>`;
+        }
+
         function readPois(raw) {
+          readTypes(raw);
           const list = Array.isArray(raw) ? raw
             : !raw || typeof raw !== 'object' ? []
             : ['pois', 'points', 'items', 'results', 'data']
@@ -435,7 +488,7 @@ public static class LeafletViewer
             riseOnHover: true,
             icon: L.divIcon({
               className: 'poi',
-              html: '<i></i>' + (labelled ? `<span>${esc(p.name)}</span>` : ''),
+              html: glyph(p.category, false) + (labelled ? `<span>${esc(p.name)}</span>` : ''),
               iconSize: null,
               iconAnchor: [0, 0],
               popupAnchor: [0, -8],
@@ -572,8 +625,11 @@ public static class LeafletViewer
           const counts = new Map();
           for (const p of pois) counts.set(p.category, (counts.get(p.category) || 0) + 1);
 
+          // A refresh rebuilds this list, and a kind someone switched off has to stay off.
+          const was = new Map(kinds.map(k => [k.category, k.on]));
+
           kinds = [...counts]
-            .map(([category, count]) => ({ category, count, on: true }))
+            .map(([category, count]) => ({ category, count, on: was.get(category) ?? true }))
             // The bucket for records that named no kind is not itself a kind, so it goes last.
             .sort((a, b) => (!a.category) - (!b.category) || a.category.localeCompare(b.category));
 
@@ -582,7 +638,8 @@ public static class LeafletViewer
           const solo = kinds.length === 1 && !kinds[0].category;
 
           $kinds.innerHTML = kinds.map((k, i) =>
-            '<label><input type="checkbox" checked data-i="' + i + '">' +
+            '<label><input type="checkbox"' + (k.on ? ' checked' : '') + ' data-i="' + i + '">' +
+            (lookOf(k.category).icon || lookOf(k.category).color ? glyph(k.category, true) : '') +
             `<span class="of">${esc(solo ? 'markers' : k.category || 'uncategorised')}</span>` +
             `<span class="n">${k.count}</span></label>`).join('');
 
@@ -608,30 +665,67 @@ public static class LeafletViewer
 
         map.on('moveend zoomend', drawPois);
 
+        async function fetchPois() {
+          // no-store: a refresh that is answered from the browser's cache refreshes nothing.
+          const response = await fetch(CFG.poiUrl, {
+            headers: { Accept: 'application/json' }, cache: 'no-store',
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return response.json();
+        }
+
+        function showPois(raw) {
+          pois = readPois(raw);
+
+          if (pois.length === 0) {
+            // An API that now returns nothing means nothing is there, not that it failed.
+            kinds = [];
+            syncKinds();
+            $kinds.classList.add('off');
+            drawPois();
+            return;
+          }
+
+          listKinds();
+          drawPois();
+        }
+
         async function loadPois() {
           let raw = POIS;
 
           if (!raw && CFG.poiUrl) {
             try {
-              const response = await fetch(CFG.poiUrl, { headers: { Accept: 'application/json' } });
-              if (!response.ok) throw new Error(`HTTP ${response.status}`);
-              raw = await response.json();
+              raw = await fetchPois();
             } catch (e) {
               // A page served from file:// cannot fetch cross-origin, and neither can one whose
               // API sends no CORS header, so say what happened rather than showing nothing.
               $kinds.innerHTML = `<div class="note">markers unavailable (${esc(e.message)})</div>`;
               $kinds.classList.remove('off');
-              return;
             }
           }
 
-          if (!raw) return;
+          if (raw) showPois(raw);
 
-          pois = readPois(raw);
-          if (pois.length === 0) return;
+          // Chained rather than setInterval, so a slow API cannot pile requests up behind
+          // itself, and the first failure does not end the refreshing -- the shard may just
+          // be restarting.
+          if (CFG.poiUrl && CFG.poiRefreshSeconds > 0 && !POIS) setTimeout(refreshPois, CFG.poiRefreshSeconds * 1000);
+        }
 
-          listKinds();
-          drawPois();
+        async function refreshPois() {
+          // A background tab has nobody to show it to; the first tick after it is looked at
+          // again catches up.
+          if (!document.hidden) {
+            try {
+              showPois(await fetchPois());
+            } catch (e) {
+              // Keep what is on the map. Blanking it because one poll failed would make every
+              // blip in the API look like the shard had lost its towns.
+              console.warn('marker refresh failed:', e.message);
+            }
+          }
+
+          setTimeout(refreshPois, CFG.poiRefreshSeconds * 1000);
         }
 
         // --- shareable position ------------------------------------------------------------

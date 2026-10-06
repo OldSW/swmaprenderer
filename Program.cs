@@ -162,7 +162,8 @@ static int RunTiling(MapScene scene, RenderOptions options)
     Console.WriteLine($"Slices      : {plan.NativeSliceCount:N0} to render, {plan.TotalSliceCount:N0} in total");
 
     if (options.PoisAreRemote)
-        Console.WriteLine($"Markers     : fetched by the page from {options.Pois}");
+        Console.WriteLine($"Markers     : fetched by the page from {options.Pois}" +
+                          (options.PoisRefresh > 0 ? $", every {options.PoisRefresh}s" : ""));
     else if (pois is { } loaded)
         Console.WriteLine($"Markers     : {loaded.Stats.Kept:N0} from {Path.GetFullPath(options.Pois!)}{DescribeSkips(loaded.Stats)}");
 
@@ -207,7 +208,7 @@ static int RunTiling(MapScene scene, RenderOptions options)
 
     var result = generator.Generate(options.Verbose ? Console.WriteLine : null);
     string page = LeafletViewer.Write(grid, plan, options.Map, directory, options.ResolvedFormat,
-        pois?.Items, options.PoisAreRemote ? options.Pois : null);
+        pois?.Items, options.PoisAreRemote ? options.Pois : null, pois?.Types, options.PoisRefresh);
 
     Console.WriteLine();
     Console.WriteLine($"Rendered {result.Rendered:N0} slices, downsampled {result.Downsampled:N0}, " +

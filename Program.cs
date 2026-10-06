@@ -215,7 +215,19 @@ static int RunTiling(MapScene scene, RenderOptions options)
 
     Directory.CreateDirectory(directory);
 
-    var result = generator.Generate(options.Verbose ? Console.WriteLine : null);
+    // --verbose already narrates progress line by line, and a bar redrawn between those lines
+    // would be overwritten by them.
+    var bar = !options.Verbose && ProgressBar.IsSupported ? new ProgressBar() : null;
+    PyramidResult result;
+    try
+    {
+        result = generator.Generate(options.Verbose ? Console.WriteLine : null, bar);
+    }
+    finally
+    {
+        bar?.Finish();
+    }
+
     string page = LeafletViewer.Write(grid, plan, options.Map, directory, options.ResolvedFormat,
         pois, fetched);
 

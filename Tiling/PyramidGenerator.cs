@@ -153,7 +153,7 @@ public sealed class PyramidGenerator
         return (0, 0, map.Width - 1, map.Height - 1);
     }
 
-    public PyramidResult Generate(Action<string>? log = null)
+    public PyramidResult Generate(Action<string>? log = null, ProgressBar? progress = null)
     {
         var stopwatch = Stopwatch.StartNew();
         var plan = Plan();
@@ -170,6 +170,16 @@ public sealed class PyramidGenerator
                 slices.Add((x, y));
 
         int done = 0;
+
+        // Every slice at every level is one tick, so the bar covers the averaged levels too
+        // rather than sitting at 100% while they run.
+        if (progress != null)
+        {
+            progress.SetTotal(slices.Count + Enumerable.Range(plan.MinZoom, Math.Max(plan.MaxZoom - plan.MinZoom, 0))
+                .Sum(z => _grid.SlicesAcross(z) * _grid.SlicesDown(z)));
+            progress.SetPhase($"level {plan.MaxZoom}");
+        }
+
         var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = threads };
 
         Parallel.ForEach(slices, parallelOptions, slice =>
@@ -179,7 +189,7 @@ public sealed class PyramidGenerator
             if (!_options.Overwrite && File.Exists(path))
             {
                 Interlocked.Increment(ref skippedExisting);
-                ReportProgress(ref done, slices.Count, log);
+                ReportProgress(ref done, slices.Count, log, progress);
                 return;
             }
 
@@ -188,7 +198,7 @@ public sealed class PyramidGenerator
                     _scene.Files.Art.MaxStaticWidth, _scene.Files.Art.MaxStaticHeight))
             {
                 Interlocked.Increment(ref skippedEmpty);
-                ReportProgress(ref done, slices.Count, log);
+                ReportProgress(ref done, slices.Count, log, progress);
                 return;
             }
 
@@ -217,14 +227,15 @@ public sealed class PyramidGenerator
                 renderers.Add(renderer);
             }
 
-            ReportProgress(ref done, slices.Count, log);
+            ReportProgress(ref done, slices.Count, log, progress);
         });
 
         log?.Invoke($"level {plan.MaxZoom}: {rendered} rendered, {skippedEmpty} empty, {skippedExisting} already present");
 
         for (int zoom = plan.MaxZoom - 1; zoom >= plan.MinZoom; zoom--)
         {
-            var (written, existing) = BuildLevel(zoom, parallelOptions);
+            progress?.SetPhase($"level {zoom}");
+            var (written, existing) = BuildLevel(zoom, parallelOptions, progress);
             downsampled += written;
             skippedExisting += existing;
             log?.Invoke($"level {zoom}: {written} averaged from the level below, {existing} already present");
@@ -234,8 +245,15 @@ public sealed class PyramidGenerator
         return new PyramidResult(rendered, downsampled, skippedEmpty, skippedExisting, stopwatch.Elapsed);
     }
 
-    private static void ReportProgress(ref int done, int total, Action<string>? log)
+    /// <summary>Ticks the bar on dispose, so every early return in a slice still counts.</summary>
+    private readonly struct Tick(ProgressBar? bar) : IDisposable
     {
+        public void Dispose() => bar?.Tick();
+    }
+
+    private static void ReportProgress(ref int done, int total, Action<string>? log, ProgressBar? progress)
+    {
+        progress?.Tick();
         int n = Interlocked.Increment(ref done);
         if (log != null && (n % 500 == 0 || n == total))
             log($"  {n}/{total} slices");
@@ -246,7 +264,7 @@ public sealed class PyramidGenerator
     /// no children at all are left absent, so empty ocean does not grow files as it rises
     /// through the pyramid.
     /// </summary>
-    private (int Written, int Existing) BuildLevel(int zoom, ParallelOptions parallelOptions)
+    private (int Written, int Existing) BuildLevel(int zoom, ParallelOptions parallelOptions, ProgressBar? progress)
     {
         int across = _grid.SlicesAcross(zoom);
         int down = _grid.SlicesDown(zoom);
@@ -262,6 +280,7 @@ public sealed class PyramidGenerator
 
         Parallel.ForEach(coords, parallelOptions, slice =>
         {
+            using var _ = new Tick(progress);
             string path = SlicePath(zoom, slice.X, slice.Y);
             if (!_options.Overwrite && File.Exists(path))
             {

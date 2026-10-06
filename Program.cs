@@ -273,12 +273,26 @@ static RenderOptions LoadOptions(string[] args)
         if (!File.Exists(path))
             throw new OptionsException([$"Config file '{path}' does not exist."]);
 
-        // The file holds the options bare, without the "Render" section appsettings.json wraps
-        // them in, so it is read on its own and re-keyed underneath that section.
+        // The file is keyed by the long switch names, lowercase and without the dashes' leading
+        // pair ("max-zoom", "pois-config"), so it reads like the command line it replaces. It is
+        // read on its own and re-keyed onto the Render section the binder expects.
         var file = new ConfigurationBuilder().AddJsonFile(path, optional: false).Build();
-        builder.AddInMemoryCollection(file.AsEnumerable()
-            .Where(kv => kv.Value != null)
-            .Select(kv => new KeyValuePair<string, string?>("Render:" + kv.Key, kv.Value)));
+        var entries = new List<KeyValuePair<string, string?>>();
+        var unknown = new List<string>();
+
+        foreach (var (key, value) in file.AsEnumerable().Where(kv => kv.Value != null))
+        {
+            string name = "--" + key.ToLowerInvariant();
+            if (name == "--config" || !CommandLine.SwitchMappings.TryGetValue(name, out string? target))
+                unknown.Add($"Unknown option '{key}' in {path}. Keys are the long switch names without the leading dashes, e.g. \"max-zoom\".");
+            else
+                entries.Add(new(target, value));
+        }
+
+        if (unknown.Count > 0)
+            throw new OptionsException(unknown);
+
+        builder.AddInMemoryCollection(entries);
     }
 
     var configuration = builder

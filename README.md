@@ -548,11 +548,13 @@ Defaults live in `appsettings.json` under `Render`. A file named with `-c, --con
 layered over it, environment variables (`SWMAP_Render__X=1420`) over that, and command-line
 switches win over everything. Run `--help` for the full list. The frequently used ones:
 
-Every switch has a config key: the long name in PascalCase, e.g. `--min-zoom` is `MinZoom`,
-`--out` is `Output` and `--data` is `DataPath`. `config.example.json` lists them all with their
-defaults; copy it, delete what you do not need, and run with `--config mine.json`. Boolean keys
-take `true`/`false`, so `--no-statics` is `"ShowStatics": false`. The file holds the keys at
-the top level, with no `Render` wrapper (that is only for `appsettings.json`).
+Every switch can be set in a `--config` file under its long name, without the leading dashes
+and in lowercase: `--min-zoom` is `"min-zoom"`, `--out` is `"out"`, `--data` is `"data"`.
+`config.example.json` lists them all with their defaults; copy it, delete what you do not need,
+and run with `--config mine.json`. Boolean switches take `true`/`false`, so `--no-statics` is
+`"statics": false`. An unknown key is an error. The file holds the keys at the top level; the
+`Render` section and PascalCase names (`DataPath`, `MinZoom`) belong to `appsettings.json` and
+the `SWMAP_Render__` environment variables.
 
 | Switch | Meaning |
 | --- | --- |

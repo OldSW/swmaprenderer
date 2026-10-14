@@ -122,6 +122,16 @@ public sealed class RenderOptions
     /// </summary>
     public string? PoisConfig { get; set; }
 
+    /// <summary>
+    /// A page to write as <c>index.html</c> instead of the built-in viewer. It is the built-in
+    /// page's own contract: <c>/*__CONFIG__*/null</c> is replaced with the pyramid's settings
+    /// and <c>/*__POIS__*/null</c> with the embedded markers, so a template can restyle or
+    /// extend the viewer and keep everything else. Resolved against the working directory.
+    ///
+    /// Only the viewer uses it; a single image ignores it.
+    /// </summary>
+    public string? Template { get; set; }
+
     /// <summary>Every marker source this run has, from whichever of the two ways they were given.</summary>
     /// <exception cref="InvalidDataException">The configuration file is unreadable or wrong.</exception>
     public IReadOnlyList<Tiling.PoiSource> ResolvePoiSources()
@@ -312,6 +322,15 @@ public sealed class RenderOptions
             else if (PoisRefresh != 0 && !PoisAreRemote)
                 errors.Add("PoisRefresh needs --pois to be an http:// or https:// URL; a file is embedded " +
                            "when the pyramid is written and the page cannot see it change.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(Template))
+        {
+            if (!File.Exists(Template))
+                errors.Add($"Template file '{Template}' does not exist.");
+            else if (!File.ReadAllText(Template).Contains(Tiling.LeafletViewer.ConfigPlaceholder))
+                errors.Add($"Template '{Template}' has no {Tiling.LeafletViewer.ConfigPlaceholder} " +
+                           "placeholder, so the page would know nothing about the pyramid it is for.");
         }
 
         if (Map is < 0 or > 5)

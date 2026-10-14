@@ -128,6 +128,13 @@ page wants a network connection the first time.
 Markers sit above the tiles as ordinary DOM rather than as pixels, which is what lets them be
 searched and changed without re-rendering; see [Points of interest](#points-of-interest).
 
+`--template <file>` (`Render:Template`) swaps the built-in page for your own. A template is
+the built-in page's contract and nothing more: `/*__CONFIG__*/null` is replaced with the
+pyramid's settings as a JSON object (grid, zoom levels, extension, marker sources) and
+`/*__POIS__*/null` with the markers embedded from files, or `null`. The first is required, the
+second optional. The built-in page is `index.template.html` in the repository root, compiled into the binary,
+and is the place to start from: edit it to change the default viewer, or copy it for your own.
+
 Tiles that were never written -- ocean, or off the edge of the facet -- simply 404 and show
 through to the page background, which is why pyramid slices default to a transparent background
 where a single image defaults to black.
@@ -571,6 +578,7 @@ the `SWMAP_Render__` environment variables.
 | `--items <file>` | JSON export of shard items to draw over the client's statics |
 | `--pois <file\|url>` | Named places to mark on the viewer and search by |
 | `--pois-config <file>` | JSON list of marker sources, each a file or a URL with its own refresh; replaces `--pois` |
+| `--template <file>` | Page to write as `index.html` in place of the built-in viewer |
 | `--pois-refresh <s>` | Re-fetch a `--pois` URL every `<s>` seconds (min 5; default 0, once on load) |
 | `--min-z`, `--max-z` | Restrict the z range |
 | `-v, --verbose` | Report the view range, tile counts and timings |

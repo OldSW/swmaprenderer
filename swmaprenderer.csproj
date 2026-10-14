@@ -38,6 +38,12 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!-- The built-in viewer page. An explicit logical name keeps the lookup independent of
+             the root namespace and of where in the tree the file lives. -->
+        <EmbeddedResource Include="index.template.html" LogicalName="index.template.html"/>
+    </ItemGroup>
+
+    <ItemGroup>
       <Folder Include="web\" />
     </ItemGroup>
 

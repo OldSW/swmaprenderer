@@ -43,6 +43,7 @@ public static class CommandLine
         ["--pois"] = "Render:Pois",
         ["--pois-config"] = "Render:PoisConfig",
         ["--pois-refresh"] = "Render:PoisRefresh",
+        ["--template"] = "Render:Template",
         ["--background"] = "Render:Background",
         ["-b"] = "Render:Background",
         ["--format"] = "Render:Format",
@@ -256,6 +257,9 @@ public static class CommandLine
               --pois-config <file>
                                   A JSON list of marker sources, each a file to embed or a
                                   URL to fetch (with its own refresh). Replaces --pois
+              --template <file>   Use this page in place of the built-in index.html. It must
+                                  contain the /*__CONFIG__*/null placeholder, which is
+                                  replaced with the pyramid's settings
               --threads <n>       Slices to render at once (default: every core)
               --overwrite         Re-render slices that already exist
               --dry-run           Report what would be written and stop

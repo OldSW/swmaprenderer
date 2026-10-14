@@ -603,7 +603,13 @@ document.getElementById('go').addEventListener('click', go);
 
 function listKinds() {
   const counts = new Map();
-  for (const p of pois) counts.set(p.category, (counts.get(p.category) || 0) + 1);
+  // Where a kind sits in the legend, set by rebuild(). A kind that two sources share
+  // belongs to the earlier one.
+  const rank = new Map();
+  for (const p of pois) {
+    counts.set(p.category, (counts.get(p.category) || 0) + 1);
+    rank.set(p.category, Math.min(rank.get(p.category) ?? Infinity, p.rank));
+  }
 
   // A refresh rebuilds this list, and a kind someone switched off has to stay off.
   const was = new Map(kinds.map(k => [k.category, k.on]));
@@ -611,7 +617,10 @@ function listKinds() {
   kinds = [...counts]
     .map(([category, count]) => ({ category, count, on: was.get(category) ?? true }))
     // The bucket for records that named no kind is not itself a kind, so it goes last.
-    .sort((a, b) => (!a.category) - (!b.category) || a.category.localeCompare(b.category));
+    // Otherwise by source, then by the order its "types" block lists them in. A kind a
+    // source does not list comes after the ones it does, alphabetically.
+    .sort((a, b) => (!a.category) - (!b.category) ||
+      rank.get(a.category) - rank.get(b.category) || a.category.localeCompare(b.category));
 
   // Data with no kinds in it at all reduces to the single switch this replaced, and
   // calling that one row "uncategorised" would be pedantry.
@@ -660,15 +669,23 @@ const sources = [
   ...CFG.poiSources.map(s => ({ ...s, data: null, failure: '', attempted: false })),
 ];
 
+// Room for every source's "types" list to be ranked inside its own band of numbers.
+const SOURCE_STRIDE = 1e6;
+
 function rebuild() {
   pois = [];
   looks = new Map();
 
-  for (const src of sources) {
-    if (!src.data) continue;
+  sources.forEach((src, i) => {
+    if (!src.data) return;
+    const order = [...src.data.types.keys()];
+    for (const p of src.data.pois) {
+      const at = order.indexOf(fold(p.category));
+      p.rank = i * SOURCE_STRIDE + (at < 0 ? SOURCE_STRIDE - 1 : at);
+    }
     pois.push(...src.data.pois);
     for (const [category, look] of src.data.types) looks.set(category, look);
-  }
+  });
 
   pois.sort((a, b) => a.name.localeCompare(b.name));
   listKinds();
@@ -742,7 +759,14 @@ map.on('moveend zoomend', () => {
 });
 
 if (!applyHash()) {
-  map.fitBounds(bounds);
+  // The hash wins over a configured start, or a link someone shared would open somewhere
+  // else the moment the page had one.
+  if (CFG.start) {
+    map.setView(canvasAt(CFG.start.x, CFG.start.y),
+      Math.min(VIEW_MAX, CFG.start.zoom ?? CFG.maxZoom - 1));
+  } else {
+    map.fitBounds(bounds);
+  }
 }
 window.addEventListener('hashchange', () => { if (!writingHash) applyHash(); });
 

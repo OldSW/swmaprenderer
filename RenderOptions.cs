@@ -171,6 +171,15 @@ public sealed class RenderOptions
     /// <summary>Tile rectangle to cover, as "x1,y1,x2,y2". Empty means the whole facet.</summary>
     public string? Region { get; set; }
 
+    /// <summary>
+    /// Where the viewer opens, as "x,y" or "x,y,zoom": a tile, and optionally the viewer's zoom
+    /// level (the figure its readout shows; fractional is fine). Left out, the page fits the
+    /// whole facet. A position in the URL hash still wins, or a shared link would stop working.
+    ///
+    /// Only the viewer uses it; a single image ignores it.
+    /// </summary>
+    public string? Start { get; set; }
+
     /// <summary>Slices to render at once. 0 uses every core.</summary>
     public int Threads { get; set; }
 
@@ -209,6 +218,26 @@ public sealed class RenderOptions
 
         var n = parts.Select(int.Parse).ToArray();
         return (Math.Min(n[0], n[2]), Math.Min(n[1], n[3]), Math.Max(n[0], n[2]), Math.Max(n[1], n[3]));
+    }
+
+    public (int X, int Y, double? Zoom)? ParsedStart => ParseStart(Start);
+
+    /// <summary>Returns null for an absent or malformed start.</summary>
+    public static (int X, int Y, double? Zoom)? ParseStart(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var parts = value.Split(',', StringSplitOptions.TrimEntries);
+        if (parts.Length is not (2 or 3) || !int.TryParse(parts[0], out int x) || !int.TryParse(parts[1], out int y))
+            return null;
+
+        if (parts.Length == 2)
+            return (x, y, null);
+
+        return double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out double zoom) && zoom >= 0
+            ? (x, y, zoom)
+            : null;
     }
 
     /// <summary>True when the run should write a pyramid rather than a single image.</summary>
@@ -371,6 +400,9 @@ public sealed class RenderOptions
 
         if (CachedBlocks < 64)
             errors.Add($"CachedBlocks must be at least 64 (got {CachedBlocks}).");
+
+        if (Start != null && ParseStart(Start) == null)
+            errors.Add($"Start '{Start}' is not a tile and an optional zoom level, e.g. 1420,1690 or 1420,1690,4.5.");
 
         if (Region != null && ParseRegion(Region) == null)
             errors.Add($"Region '{Region}' is not four comma-separated tile coordinates, e.g. 1350,1600,1500,1750.");

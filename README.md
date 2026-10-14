@@ -128,6 +128,11 @@ page wants a network connection the first time.
 Markers sit above the tiles as ordinary DOM rather than as pixels, which is what lets them be
 searched and changed without re-rendering; see [Points of interest](#points-of-interest).
 
+`--start <x,y[,zoom]>` (`Render:Start`) opens the page at a tile instead of fitting the whole
+facet. The zoom is the level the page's readout shows and may be fractional; left out it is one
+level short of the deepest, as for the search box. A position in the URL hash still wins, so
+shared links keep working.
+
 `--template <file>` (`Render:Template`) swaps the built-in page for your own. A template is
 the built-in page's contract and nothing more: `/*__CONFIG__*/null` is replaced with the
 pyramid's settings as a JSON object (grid, zoom levels, extension, marker sources) and
@@ -579,6 +584,7 @@ the `SWMAP_Render__` environment variables.
 | `--pois <file\|url>` | Named places to mark on the viewer and search by |
 | `--pois-config <file>` | JSON list of marker sources, each a file or a URL with its own refresh; replaces `--pois` |
 | `--template <file>` | Page to write as `index.html` in place of the built-in viewer |
+| `--start <x,y[,zoom]>` | Where the viewer opens: a tile and optionally a zoom level (default: the whole facet) |
 | `--pois-refresh <s>` | Re-fetch a `--pois` URL every `<s>` seconds (min 5; default 0, once on load) |
 | `--min-z`, `--max-z` | Restrict the z range |
 | `-v, --verbose` | Report the view range, tile counts and timings |

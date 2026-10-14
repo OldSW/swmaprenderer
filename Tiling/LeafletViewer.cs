@@ -46,11 +46,12 @@ public static class LeafletViewer
     /// <param name="embedded">Markers read at generation time, to embed in the page. Null when
     /// no source was a file.</param>
     /// <param name="fetched">Sources the page fetches itself, each on its own interval.</param>
+    /// <param name="start">Where the page opens when its URL says nothing. Null fits the facet.</param>
     /// <param name="templatePath">A page to use in place of the built-in one, with the same
     /// placeholders. Null for the built-in.</param>
     public static string Write(SliceGrid grid, PyramidPlan plan, int mapIndex, string outputDirectory,
         ImageFormat format, PointsOfInterest? embedded = null, IReadOnlyList<PoiSource>? fetched = null,
-        string? templatePath = null)
+        string? templatePath = null, (int X, int Y, double? Zoom)? start = null)
     {
         var config = new
         {
@@ -74,6 +75,7 @@ public static class LeafletViewer
             mapWidth = grid.Map.Width,
             mapHeight = grid.Map.Height,
             tilesPerSlice = grid.TilesPerSlice,
+            start = start is { } s ? new { x = s.X, y = s.Y, zoom = s.Zoom } : null,
             extension = format.Extension,
             format = format.Name,
             poiSources = (fetched ?? []).Select(s => new

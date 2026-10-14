@@ -62,6 +62,7 @@ public static class CommandLine
         ["--min-zoom"] = "Render:MinZoom",
         ["--max-zoom"] = "Render:MaxZoom",
         ["--region"] = "Render:Region",
+        ["--start"] = "Render:Start",
         ["--threads"] = "Render:Threads",
         ["--overwrite"] = "Render:Overwrite",
         ["--dry-run"] = "Render:DryRun",
@@ -260,6 +261,9 @@ public static class CommandLine
               --template <file>   Use this page in place of the built-in index.html. It must
                                   contain the /*__CONFIG__*/null placeholder, which is
                                   replaced with the pyramid's settings
+              --start <x,y[,zoom]>
+                                  Open the page at this tile and, optionally, zoom level
+                                  (default: the whole facet). A position in the URL wins
               --threads <n>       Slices to render at once (default: every core)
               --overwrite         Re-render slices that already exist
               --dry-run           Report what would be written and stop

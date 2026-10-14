@@ -229,7 +229,7 @@ static int RunTiling(MapScene scene, RenderOptions options)
     }
 
     string page = LeafletViewer.Write(grid, plan, options.Map, directory, options.ResolvedFormat,
-        pois, fetched, options.Template);
+        pois, fetched, options.Template, options.ParsedStart);
 
     Console.WriteLine();
     Console.WriteLine($"Rendered {result.Rendered:N0} slices, downsampled {result.Downsampled:N0}, " +

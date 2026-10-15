@@ -341,6 +341,33 @@ The `pois.json` in this repository is the shard's eighteen town stones -- `Towns
 the item export, which all carry that same name -- each named after the region it stands in,
 from `regions.json`.
 
+#### Outlines
+
+A type can say `"outline": true` to have the area its markers stand for drawn on the map as
+well, in the type's `color` (gold if it has none):
+
+```json
+{ "name": "town-regions", "type": "file", "path": "town-regions.json", "category": "town-region",
+  "types": { "town-region": { "color": "#ffd479", "outline": true, "label": false } } }
+```
+
+The area is the record's `coords` -- the rectangles of a region export -- or an `area` of
+`[x1, y1, x2, y2]` arrays. A rectangle runs from its start tile up to, not through, its end
+tile, which is how the shard's own `Rectangle2D` reads. The rectangles of one marker are
+merged into a single outline: where they touch or overlap there is no line, so Britain's sixteen
+are one shape. Rectangles that do not meet stay separate rings of the same outline, and a hole
+is drawn as one. The marker is still drawn and is still
+what a search lands on; the outline is in addition to it, filled faintly and not clickable so
+that it never covers the marker. It is a property of the type rather than of a subtype, and
+only types that ask for it have their rectangles embedded in the page: a region list holds
+thousands, and the rest would be dead weight.
+
+`town-regions.json` in this repository is the eighteen town regions from `regions.json`, picked
+by matching the names of the towns in `pois.json` and the shard's `/api/pois` ignoring case,
+spaces and punctuation (`Neu Arium` is `Neu-Arium`, `Serpent's Hold` is `Serpents Hold`). Nothing
+in the region export says what is a town, so a town that is not on that list -- Papua, Moonglow
+and Skara Brae are regions but not towns there -- has no outline until it is added to the file.
+
 ### Finding a place
 
 The viewer's box takes either `x, y` or a name. Typing a name lists up to twelve matches with

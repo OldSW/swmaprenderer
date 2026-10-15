@@ -313,6 +313,8 @@ function readLook(t, nested) {
     icon,
     // Left undefined when unsaid, so that a subtype can tell "no opinion" from "show it".
     label: typeof o.label === 'boolean' ? o.label : undefined,
+    // Per type, not per subtype: it is the category that is a place with an extent.
+    outline: o.outline === true,
     color: color && CSS.supports('color', color) ? color : '',
   };
 
@@ -349,6 +351,7 @@ function lookOf(category, subtype) {
     icon: sub.icon || (sub.color ? '' : base.icon),
     color: sub.color || base.color,
     label: sub.label ?? base.label,
+    outline: base.outline,
   };
 }
 
@@ -420,6 +423,7 @@ function readPois(raw, src = {}) {
       x: at.x, y: at.y, z: at.z,
       description: text(r.description) || text(r.desc),
       icon: text(r.icon),
+      area: areaOf(r),
       url: linkOf(text(r.url) || text(r.link)),
       // Only the embedded list is ours; a third party's own "order" means something else.
       order: src.name === 'embedded' && Number.isInteger(r.order) ? r.order : undefined,
@@ -435,6 +439,26 @@ const text = v => typeof v === 'string' ? v.trim() : '';
 // A link is only ever followed if it is http(s) or relative: a record from a third party's
 // API must not be able to plant a `javascript:` URL in a popup.
 const linkOf = v => /^https?:/i.test(v) || (v && !/^[a-z][a-z0-9+.-]*:/i.test(v)) ? v : '';
+
+// The rectangles a record covers, as [x1, y1, x2, y2] with x1 <= x2: either the embedded
+// list's own `area`, or a region export's `coords`. A rectangle runs from its start tile up
+// to, not through, its end tile, as a UO Rectangle2D does.
+function areaOf(r) {
+  const out = [];
+  const add = (x1, y1, x2, y2) => {
+    if ([x1, y1, x2, y2].every(Number.isFinite))
+      out.push([Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)]);
+  };
+
+  if (Array.isArray(r.area))
+    for (const a of r.area) if (Array.isArray(a) && a.length === 4) add(...a.map(Number));
+
+  if (out.length === 0 && Array.isArray(r.coords))
+    for (const c of r.coords)
+      if (c && c.start && c.end) add(Number(c.start.x), Number(c.start.y), Number(c.end.x), Number(c.end.y));
+
+  return out;
+}
 
 function place(o) {
   if (!o || typeof o !== 'object') return null;
@@ -510,6 +534,78 @@ function iconScale() {
   return Math.min(1, Math.max(ICON_MIN, Math.sqrt(tilePixels() / ICON_FULL_AT)));
 }
 
+// The outer boundary of a set of rectangles, as closed rings of [x, y] tile corners: where
+// rectangles touch or overlap there is no line, so a town of sixteen is one shape rather than
+// sixteen boxes. Done on the grid the rectangles' own edges make, which is small however big
+// the town, by listing the sides of covered cells that have an uncovered neighbour and
+// chaining them end to start. A gap between rectangles, or a corner they only meet at, leaves
+// separate rings, which is what the ground does too.
+function boundaryOf(area) {
+  const xs = [...new Set(area.flatMap(r => [r[0], r[2]]))].sort((a, b) => a - b);
+  const ys = [...new Set(area.flatMap(r => [r[1], r[3]]))].sort((a, b) => a - b);
+  const col = new Map(xs.map((x, i) => [x, i])), row = new Map(ys.map((y, i) => [y, i]));
+
+  const covered = new Set();
+  for (const [x1, y1, x2, y2] of area)
+    for (let i = col.get(x1); i < col.get(x2); i++)
+      for (let j = row.get(y1); j < row.get(y2); j++)
+        covered.add(i + ',' + j);
+
+  // Every edge runs with the covered cell on its right, so rings come out the same way round.
+  const edges = new Map();
+  const add = (x1, y1, x2, y2) => {
+    const k = x1 + ',' + y1;
+    if (!edges.has(k)) edges.set(k, []);
+    edges.get(k).push([x2, y2]);
+  };
+  for (const key of covered) {
+    const [i, j] = key.split(',').map(Number);
+    const x1 = xs[i], x2 = xs[i + 1], y1 = ys[j], y2 = ys[j + 1];
+    if (!covered.has(i + ',' + (j - 1))) add(x1, y1, x2, y1);
+    if (!covered.has((i + 1) + ',' + j)) add(x2, y1, x2, y2);
+    if (!covered.has(i + ',' + (j + 1))) add(x2, y2, x1, y2);
+    if (!covered.has((i - 1) + ',' + j)) add(x1, y2, x1, y1);
+  }
+
+  const rings = [];
+  for (const [start, outs] of edges) {
+    while (outs.length) {
+      const ring = [start.split(',').map(Number)];
+      let at = outs.pop();
+      while (at.join() !== start) {
+        ring.push(at);
+        at = edges.get(at.join()).pop();
+      }
+      // Only the corners: a run of collinear points is the same line, drawn heavier.
+      const n = ring.length;
+      rings.push(ring.filter((p, i) => {
+        const a = ring[(i + n - 1) % n], b = ring[(i + 1) % n];
+        return (p[0] - a[0]) * (b[1] - p[1]) !== (p[1] - a[1]) * (b[0] - p[0]);
+      }));
+    }
+  }
+  return rings;
+}
+
+// A type that asks for it has the area its marker stands for drawn as well. This is a pass of
+// its own rather than part of the marker loop, because the marker is capped to the ones
+// nearest the middle of the screen and the middle of a large town can be off it while its
+// walls are not. Not interactive: it must never be in the way of the marker's own click.
+function drawOutlines(view) {
+  for (const p of pois) {
+    if (!p.area || p.area.length === 0 || !isOn(p) || !lookOf(p.category, p.subtype).outline) continue;
+
+    // Tile corners, hence x2 and y2 as they are: a rectangle ends where its last tile does
+    // not begin. Worked out once per marker, not once per redraw.
+    p.rings ??= boundaryOf(p.area).map(ring => ring.map(([x, y]) => canvasAt(x, y)));
+    if (!view.intersects(L.latLngBounds(p.rings.flat()))) continue;
+
+    const color = lookOf(p.category, p.subtype).color || '#ffd479';
+    L.polygon(p.rings, { color, weight: 2, opacity: 0.9, fillColor: color, fillOpacity: 0.08, interactive: false })
+      .addTo(poiLayer);
+  }
+}
+
 function drawPois() {
   map.getContainer().style.setProperty('--icon-scale', iconScale().toFixed(3));
   poiLayer.clearLayers();
@@ -517,6 +613,8 @@ function drawPois() {
 
   const view = map.getBounds().pad(0.1);
   const centre = map.getCenter();
+
+  drawOutlines(view);
 
   const near = [];
   for (const p of pois) {

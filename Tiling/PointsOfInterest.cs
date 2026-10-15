@@ -7,16 +7,19 @@ using SwMapRenderer.Map;
 namespace SwMapRenderer.Tiling;
 
 /// <summary>One marker, in the canonical shape the viewer consumes.</summary>
-public readonly record struct Poi(string Name, int X, int Y, int Z, string? Category, string? Description, string? Icon = null, int? Order = null, string? Subtype = null, string? Url = null);
+public readonly record struct Poi(string Name, int X, int Y, int Z, string? Category, string? Description, string? Icon = null, int? Order = null, string? Subtype = null, string? Url = null,
+    IReadOnlyList<int[]>? Area = null);
 
 /// <summary>
 /// How markers of one category look: a picture, or failing that the colour of the dot. A
 /// <paramref name="Label"/> of false keeps the name off the map, leaving it to the tooltip.
 /// <paramref name="Subtypes"/> refine it: a subtype's own icon, colour and label win over the
-/// category's, and whatever it leaves unsaid is inherited.
+/// category's, and whatever it leaves unsaid is inherited. <paramref name="Outline"/> draws the
+/// area a marker covers -- its region's rectangles -- as an outline on the map, in the type's
+/// colour, as well as the marker itself.
 /// </summary>
 public readonly record struct PoiType(string? Icon, string? Color, bool? Label = null,
-    IReadOnlyDictionary<string, PoiType>? Subtypes = null);
+    IReadOnlyDictionary<string, PoiType>? Subtypes = null, bool? Outline = null);
 
 /// <summary>What <see cref="PointsOfInterest.Load"/> made of the file, for the run's log.</summary>
 public readonly record struct PoiStats(
@@ -119,11 +122,19 @@ public sealed class PointsOfInterest
                 continue;
             }
 
+            string? category = First(record.Category, record.Type, source?.Category);
+
+            // Only what an outline will draw is carried: a region list holds thousands of
+            // rectangles, and the page has no use for the ones that are never drawn.
+            var area = category != null && types.TryGetValue(category, out var look) && look.Outline == true
+                ? record.Area()
+                : null;
+
             kept.Add(new Poi(name, x, y, z,
-                First(record.Category, record.Type, source?.Category),
+                category,
                 First(record.Description, record.Desc),
                 First(record.Icon), source?.Order, First(record.Subtype, record.Subcategory),
-                First(record.Url, record.Link)));
+                First(record.Url, record.Link), area));
         }
 
         Sort(kept);
@@ -355,7 +366,7 @@ public sealed class PointsOfInterest
     private static PoiType? ReadLook(JsonElement value, bool allowSubtypes)
     {
         string? icon = null, color = null;
-        bool? label = null;
+        bool? label = null, outline = null;
         Dictionary<string, PoiType>? subtypes = null;
 
         if (value.ValueKind == JsonValueKind.String)
@@ -369,6 +380,9 @@ public sealed class PointsOfInterest
             if (value.TryGetProperty("label", out var flag) && flag.ValueKind is JsonValueKind.True or JsonValueKind.False)
                 label = flag.GetBoolean();
 
+            if (value.TryGetProperty("outline", out var ring) && ring.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                outline = ring.GetBoolean();
+
             if (allowSubtypes &&
                 value.TryGetProperty("subtypes", out var block) && block.ValueKind == JsonValueKind.Object)
             {
@@ -380,8 +394,8 @@ public sealed class PointsOfInterest
             }
         }
 
-        return icon != null || color != null || label != null || subtypes != null
-            ? new PoiType(icon, color, label, subtypes)
+        return icon != null || color != null || label != null || outline != null || subtypes != null
+            ? new PoiType(icon, color, label, subtypes, outline)
             : null;
     }
 
@@ -492,6 +506,23 @@ public sealed class PointsOfInterest
         /// </summary>
         private static (int X, int Y, int Z)? Usable(PointRecord? p) =>
             p is { X: not 0 } or { Y: not 0 } ? (p.X, p.Y, p.Z) : null;
+
+        /// <summary>
+        /// The rectangles the record covers, as [x1, y1, x2, y2] with the corners ordered. Null
+        /// when it lists none.
+        /// </summary>
+        public List<int[]>? Area()
+        {
+            var area = new List<int[]>();
+
+            foreach (var rect in Coords ?? [])
+            {
+                if (rect is { Start: { } a, End: { } b })
+                    area.Add([Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(a.X, b.X), Math.Max(a.Y, b.Y)]);
+            }
+
+            return area.Count > 0 ? area : null;
+        }
 
         private (int X, int Y, int Z)? Centre()
         {

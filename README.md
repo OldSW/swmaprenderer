@@ -247,7 +247,7 @@ read it, because the API cannot be asked to change:
   A `types` entry here wins over one in the source's own response.
 
 - `fields` says where in a record each property is, as dotted paths (`"pos.east"`, `"loc.0"`).
-  It can map `name`, `category`, `description`, `mapId`, `position` (the path of an object
+  It can map `name`, `category`, `description`, `icon`, `mapId`, `position` (the path of an object
   with `x`, `y`, `z`), and `x`, `y`, `z` separately for an API that keeps the coordinates
   apart:
 
@@ -293,6 +293,45 @@ the browser accepts (`#6cc4ff`, `crimson`, `rgb(...)`); one it rejects is ignore
 colour also appears beside the type's checkbox. It works the same whether the file is embedded or fetched from a URL,
 since both carry the same envelope. A bare array has no place for `types` and so no icons.
 
+A type can also say `"label": false` to keep its markers' names off the map: the name then shows
+only in the tooltip on hover (and in the popup), however far the view is zoomed in. It suits a
+category with hundreds of markers, where the labels would bury the icons.
+
+A single marker can carry its own `icon` too, in the record itself, and it wins over the icon of
+the marker's type. It is a URL resolved by the browser like the type's, and a source's `fields`
+can map it from the API's own property. Only the marker on the map uses it; the legend still
+shows the type's.
+
+#### Subtypes
+
+A record can refine its category with a `subtype` (`subType` and `subcategory` are accepted
+too, and a source's `fields` can map it): `"category": "vendor", "subtype": "alchemist"`. A
+type lists the looks of its subtypes under `subtypes`:
+
+```json
+{
+  "types": {
+    "vendor": {
+      "color": "#f5c542",
+      "label": false,
+      "subtypes": {
+        "alchemist": { "icon": "icons/alchemist.gif" },
+        "smith":     { "icon": "icons/smith.gif" },
+        "healer":    { "color": "#7be07b" }
+      }
+    }
+  },
+  "pois": [ { "name": "Haro", "category": "vendor", "subtype": "alchemist", "position": { "x": 6054, "y": 1312, "z": 55 } } ]
+}
+```
+
+A subtype takes what it says and inherits the rest from its category, so `label: false` above
+reaches all three. The one exception is that a subtype with a `color` and no `icon` drops the
+category's icon -- it asked for a dot, and an icon would win over it. A marker's own `icon`
+still beats both. Subtypes are one level deep, and one that is not listed still gets a legend
+row, drawn with its category's look. A subtype is shown in the popup after the category and is
+searched along with the name.
+
 The `pois.json` in this repository is the shard's eighteen town stones -- `Townstone` items in
 the item export, which all carry that same name -- each named after the region it stands in,
 from `regions.json`.
@@ -316,6 +355,13 @@ for records that named no category last. Unchecking a kind hides its markers *an
 of the search, since being sent to a place you have just said you do not care about is not
 helpful. Data with no categories at all collapses to a single row, which is then just labelled
 `markers`.
+
+A category whose records name subtypes gets a row per subtype, indented beneath it with its
+own count and look. Each subtype can be switched off alone; the category's own box switches all
+of them together and shows half-checked when only some are on. Records of the category that
+named no subtype are the `other` row. A category with no subtypes in the data has no rows
+under it. The subtype rows start folded, since a category can have dozens; the arrow beside
+the category opens them, and which are open survives a refresh.
 
 ## Shard items
 

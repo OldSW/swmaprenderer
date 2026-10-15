@@ -80,7 +80,7 @@ public static class LeafletViewer
             format = format.Name,
             poiSources = (fetched ?? []).Select(s => new
             {
-                name = s.Name, url = s.Location, refreshSeconds = s.RefreshSeconds,
+                name = s.Name, order = s.Order, url = s.Location, refreshSeconds = s.RefreshSeconds,
                 key = s.Key, category = s.Category, mapId = s.MapId, types = s.Types, fields = s.Fields,
             }),
         };

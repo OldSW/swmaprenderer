@@ -24,7 +24,15 @@ public enum PoiSourceKind
 public sealed record PoiSource(string Name, PoiSourceKind Kind, string Location, int RefreshSeconds,
     string? Key = null, string? Category = null, int? MapId = null,
     IReadOnlyDictionary<string, PoiType>? Types = null,
-    IReadOnlyDictionary<string, string>? Fields = null);
+    IReadOnlyDictionary<string, string>? Fields = null)
+{
+    /// <summary>
+    /// Where the configuration lists this source. The page orders the legend by it, and a file
+    /// is embedded while a URL is fetched, so without it every file would sort ahead of every
+    /// URL whatever order the configuration gave them in.
+    /// </summary>
+    public int Order { get; init; }
+}
 
 /// <summary>
 /// The list of places the markers come from, read from a JSON file so that a shard can have its

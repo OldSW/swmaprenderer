@@ -7,10 +7,16 @@ using SwMapRenderer.Map;
 namespace SwMapRenderer.Tiling;
 
 /// <summary>One marker, in the canonical shape the viewer consumes.</summary>
-public readonly record struct Poi(string Name, int X, int Y, int Z, string? Category, string? Description);
+public readonly record struct Poi(string Name, int X, int Y, int Z, string? Category, string? Description, string? Icon = null, int? Order = null, string? Subtype = null);
 
-/// <summary>How markers of one category look: a picture, or failing that the colour of the dot.</summary>
-public readonly record struct PoiType(string? Icon, string? Color);
+/// <summary>
+/// How markers of one category look: a picture, or failing that the colour of the dot. A
+/// <paramref name="Label"/> of false keeps the name off the map, leaving it to the tooltip.
+/// <paramref name="Subtypes"/> refine it: a subtype's own icon, colour and label win over the
+/// category's, and whatever it leaves unsaid is inherited.
+/// </summary>
+public readonly record struct PoiType(string? Icon, string? Color, bool? Label = null,
+    IReadOnlyDictionary<string, PoiType>? Subtypes = null);
 
 /// <summary>What <see cref="PointsOfInterest.Load"/> made of the file, for the run's log.</summary>
 public readonly record struct PoiStats(
@@ -115,7 +121,8 @@ public sealed class PointsOfInterest
 
             kept.Add(new Poi(name, x, y, z,
                 First(record.Category, record.Type, source?.Category),
-                First(record.Description, record.Desc)));
+                First(record.Description, record.Desc),
+                First(record.Icon), source?.Order, First(record.Subtype, record.Subcategory)));
         }
 
         Sort(kept);
@@ -201,7 +208,7 @@ public sealed class PointsOfInterest
     /// </summary>
     public static readonly IReadOnlySet<string> MappableFields = new HashSet<string>
     {
-        "name", "category", "description", "mapId", "position", "x", "y", "z",
+        "name", "category", "subtype", "description", "icon", "mapId", "position", "x", "y", "z",
     };
 
     /// <summary>
@@ -225,7 +232,7 @@ public sealed class PointsOfInterest
 
             var record = JsonNode.Parse(element.GetRawText())!.AsObject();
 
-            foreach (string name in (string[])["name", "category", "description"])
+            foreach (string name in (string[])["name", "category", "subtype", "description", "icon"])
             {
                 if (fields.TryGetValue(name, out string? path))
                     record[name] = Pluck(element, path) is { } v ? JsonNode.Parse(v.GetRawText()) : null;
@@ -317,8 +324,10 @@ public sealed class PointsOfInterest
     /// <c>{ "town": { "icon": "icons/town.png", "color": "#ffd479" } }</c>. A bare string is
     /// taken as the icon. The colour is what the dot is painted when there is no icon, and it
     /// is left unchecked here: the page validates it, because it is the page that puts it
-    /// into a style. A type with neither is left out rather than failing the file -- it only
-    /// costs the marker its look.
+    /// into a style. <c>"label": false</c> keeps the name off the map for the type, and
+    /// <c>"subtypes": { "alchemist": { "icon": ... } }</c> gives its subtypes looks of their own.
+    /// A type with none of them is left out rather than failing the file -- it only costs the
+    /// marker its look.
     /// </summary>
     internal static Dictionary<string, PoiType> ReadTypes(JsonElement root)
     {
@@ -331,24 +340,48 @@ public sealed class PointsOfInterest
 
         foreach (var entry in block.EnumerateObject())
         {
-            var value = entry.Value;
-            string? icon = null, color = null;
-
-            if (value.ValueKind == JsonValueKind.String)
-            {
-                icon = First(value.GetString());
-            }
-            else if (value.ValueKind == JsonValueKind.Object)
-            {
-                icon = Text(value, "icon");
-                color = Text(value, "color");
-            }
-
-            if (icon != null || color != null)
-                types[entry.Name.Trim()] = new PoiType(icon, color);
+            if (ReadLook(entry.Value, allowSubtypes: true) is { } look)
+                types[entry.Name.Trim()] = look;
         }
 
         return types;
+    }
+
+    /// <summary>
+    /// One entry of a <c>types</c> block. A subtype is read the same way but cannot have
+    /// subtypes of its own: the legend has two levels, and a third would have nowhere to go.
+    /// </summary>
+    private static PoiType? ReadLook(JsonElement value, bool allowSubtypes)
+    {
+        string? icon = null, color = null;
+        bool? label = null;
+        Dictionary<string, PoiType>? subtypes = null;
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            icon = First(value.GetString());
+        }
+        else if (value.ValueKind == JsonValueKind.Object)
+        {
+            icon = Text(value, "icon");
+            color = Text(value, "color");
+            if (value.TryGetProperty("label", out var flag) && flag.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                label = flag.GetBoolean();
+
+            if (allowSubtypes &&
+                value.TryGetProperty("subtypes", out var block) && block.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var sub in block.EnumerateObject())
+                {
+                    if (ReadLook(sub.Value, allowSubtypes: false) is { } look)
+                        (subtypes ??= new Dictionary<string, PoiType>(StringComparer.OrdinalIgnoreCase))[sub.Name.Trim()] = look;
+                }
+            }
+        }
+
+        return icon != null || color != null || label != null || subtypes != null
+            ? new PoiType(icon, color, label, subtypes)
+            : null;
     }
 
     private static string? Text(JsonElement element, string property) =>
@@ -401,8 +434,19 @@ public sealed class PointsOfInterest
         public string? Category { get; set; }
         public string? Type { get; set; }
 
+        /// <summary>
+        /// A refinement of the category, with a look of its own and a legend row. Reads
+        /// "subType" too: names are matched case-insensitively, so a second property for it
+        /// would collide with this one.
+        /// </summary>
+        public string? Subtype { get; set; }
+        public string? Subcategory { get; set; }
+
         public string? Description { get; set; }
         public string? Desc { get; set; }
+
+        /// <summary>This marker's own picture, which wins over its category's.</summary>
+        public string? Icon { get; set; }
 
         public int? MapId { get; set; }
 

@@ -147,7 +147,7 @@ static int RunTiling(MapScene scene, RenderOptions options)
 
     // Read before anything is rendered. A marker file that cannot be parsed should fail the run
     // in its first second rather than after an hour of slices, and --dry-run should catch it.
-    var poiSources = options.ResolvePoiSources();
+    var poiSources = options.ResolvePoiSources().Select((source, i) => source with { Order = i }).ToList();
     var embedded = poiSources
         .Where(source => source.Kind == PoiSourceKind.File)
         .Select(source => (Source: source, Pois: PointsOfInterest.Load(source.Location, options.Map, files.Dimensions, source)))

@@ -43,13 +43,24 @@
   .north svg { width: 20px; height: 20px; transition: transform 0.3s; }
 
   /* --- points of interest --- */
-  .find .kinds { margin-top: 5px; max-height: 11em; overflow-y: auto; }
+  /* Grows with the rows, so that opening a category does not leave its subtypes behind a
+     scrollbar, and stops short of the bottom of the window, where it scrolls instead. */
+  .find .kinds { margin-top: 5px; max-height: max(11em, calc(100vh - 12em)); overflow-y: auto; }
   .find .kinds.off { display: none; }
   .find .kinds label {
     display: flex; align-items: center; gap: 5px; padding: 1px 0;
     color: #9a9aa4; cursor: pointer; user-select: none;
   }
   .find .kinds input { margin: 0; flex: none; accent-color: #ffd479; }
+  .find .kinds .sub { padding-left: 32px; }
+  .find .kinds .subs.shut { display: none; }
+  .find .kinds .fold {
+    flex: none; width: 13px; padding: 0; border: 0; background: none; cursor: pointer;
+    color: #7c7c88; font: inherit; line-height: 1;
+  }
+  .find .kinds .fold::before { content: '\25B8'; }
+  .find .kinds .fold.open::before { content: '\25BE'; }
+  .find .kinds .gap { flex: none; width: 13px; }
   .find .kinds .of {
     flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
@@ -78,11 +89,19 @@
   .find .kinds i.dot {
     flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c);
   }
-  .poi img {
-    position: absolute; left: 0; top: 0; max-width: 28px; max-height: 28px;
-    transform: translate(-50%, -50%); filter: drop-shadow(0 0 2px #000);
+  .leaflet-container .leaflet-marker-pane .poi img {
+    /* Leaflet's own `.leaflet-container .leaflet-marker-pane img { max-width: none !important }`
+       would otherwise win, and a server-supplied thumbnail (a guild's avatar) is drawn at
+       whatever size it was uploaded. Both sides are !important, so it is specificity that
+       decides: this selector has to out-rank Leaflet's, `!important` alone does not. */
+    position: absolute; left: 0; top: 0; max-width: 28px !important; max-height: 28px !important;
+    transform: translate(-50%, -50%) scale(var(--icon-scale, 1)); filter: drop-shadow(0 0 2px #000);
   }
   .poi img + span { left: 16px; }
+  /* The tooltip and popup panes are outside the marker pane, so Leaflet's img rule does not reach them. */
+  .leaflet-tooltip img.tip, .pop img.tip {
+    height: 16px; width: auto; max-width: 28px; vertical-align: middle; margin-right: 5px;
+  }
   .find .kinds img { height: 14px; width: auto; flex: none; }
   .poi span {
     position: absolute; left: 7px; top: -9px; white-space: nowrap; pointer-events: none;
@@ -216,9 +235,14 @@ function tileAt(latlng) {
   return { x: (a + b) / 2, y: (b - a) / 2 };
 }
 
-function canvasAt(tileX, tileY) {
+// One unit of z lifts what stands there 4 canvas px (TILE_Z_SCALE) up the screen, at the
+// canvas's own scale. Without it a marker on a hill or an upper floor is drawn at the foot
+// of the ground below it, which is where the terrain is but not where the mobile is.
+const Z_LIFT = 4 * CFG.halfTile / 22;
+
+function canvasAt(tileX, tileY, z = 0) {
   return L.latLng(
-    CFG.halfTile * (tileX + tileY) + CFG.originY,
+    CFG.halfTile * (tileX + tileY) - z * Z_LIFT + CFG.originY,
     CFG.halfTile * (tileX - tileY) + CFG.originX);
 }
 
@@ -278,31 +302,60 @@ map.on('zoomend', () => readout.update());
 // its own and they are merged once all are in.
 let looks = new Map();
 
+function readLook(t, nested) {
+  const o = typeof t === 'string' ? { icon: t } : t || {};
+  const icon = text(o.icon);
+  // The colour goes into a style attribute, so only something the browser itself
+  // accepts as a colour gets that far.
+  const color = text(o.color);
+  const look = {
+    icon,
+    // Left undefined when unsaid, so that a subtype can tell "no opinion" from "show it".
+    label: typeof o.label === 'boolean' ? o.label : undefined,
+    color: color && CSS.supports('color', color) ? color : '',
+  };
+
+  // Two levels only, as in the legend: a subtype's own "subtypes" is ignored.
+  if (!nested) {
+    look.subtypes = new Map();
+    const subs = o.subtypes && typeof o.subtypes === 'object' ? o.subtypes : {};
+    for (const [key, sub] of Object.entries(subs))
+      look.subtypes.set(fold(key.trim()), readLook(sub, true));
+  }
+
+  return look;
+}
+
 function readTypes(raw) {
   const types = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw.types : null;
   const out = new Map();
   if (!types || typeof types !== 'object') return out;
 
-  for (const [key, t] of Object.entries(types)) {
-    const o = typeof t === 'string' ? { icon: t } : t || {};
-    const icon = text(o.icon);
-    // The colour goes into a style attribute, so only something the browser itself
-    // accepts as a colour gets that far.
-    const color = text(o.color);
-    out.set(fold(key.trim()), {
-      icon,
-      color: color && CSS.supports('color', color) ? color : '',
-    });
-  }
+  for (const [key, t] of Object.entries(types))
+    out.set(fold(key.trim()), readLook(t, false));
 
   return out;
 }
 
-const lookOf = category => (category && looks.get(fold(category))) || {};
+// A subtype's look over its category's. What the subtype leaves unsaid is inherited, except
+// that a colour of its own takes the category's icon away: it asked for a dot, and an icon
+// would win over it.
+function lookOf(category, subtype) {
+  const base = (category && looks.get(fold(category))) || {};
+  const sub = subtype && base.subtypes && base.subtypes.get(fold(subtype));
+  if (!sub) return base;
+  return {
+    icon: sub.icon || (sub.color ? '' : base.icon),
+    color: sub.color || base.color,
+    label: sub.label ?? base.label,
+  };
+}
 
-// The marker's picture: the type's icon, else the dot, painted in the type's colour.
-function glyph(category, dot) {
-  const { icon, color } = lookOf(category);
+// The marker's picture: its own icon, else its subtype's, else its type's, else the dot,
+// painted in the most specific colour there is.
+function glyph(category, dot, own, subtype) {
+  const { icon: typeIcon, color } = lookOf(category, subtype);
+  const icon = own || typeIcon;
   if (icon) return `<img src="${esc(icon)}" alt="">`;
   return `<i${dot ? ' class="dot"' : ''}${color ? ` style="--c:${esc(color)}"` : ''}></i>`;
 }
@@ -316,7 +369,7 @@ const pluck = (o, path) => String(path).split('.')
 // something else. Mirrors PointsOfInterest.Remap, which does the same for a file.
 function remap(r, f) {
   const c = { ...r };
-  for (const k of ['name', 'category', 'description', 'mapId'])
+  for (const k of ['name', 'category', 'subtype', 'description', 'icon', 'mapId'])
     if (f[k]) c[k] = pluck(r, f[k]);
 
   if (f.position) c.position = pluck(r, f.position);
@@ -360,11 +413,15 @@ function readPois(raw, src = {}) {
     if (!at) continue;
 
     const category = text(r.category) || text(r.type) || text(src.category);
+    const subtype = text(r.subtype) || text(r.subType) || text(r.subcategory);
     out.push({
-      name, category,
+      name, category, subtype,
       x: at.x, y: at.y, z: at.z,
       description: text(r.description) || text(r.desc),
-      key: fold(name + ' ' + category),
+      icon: text(r.icon),
+      // Only the embedded list is ours; a third party's own "order" means something else.
+      order: src.name === 'embedded' && Number.isInteger(r.order) ? r.order : undefined,
+      key: fold(name + ' ' + category + ' ' + subtype),
     });
   }
 
@@ -412,7 +469,16 @@ let pois = [];
 // One checkbox per kind of place the data turned out to hold. What kinds those are is
 // the shard's business rather than ours, so the list is discovered, not declared.
 let kinds = [];
-let enabled = new Set();
+// What the legend has switched off, as category + subtype pairs. The leaves are what is
+// toggled: a category's own box is derived from its subtypes, so there is one state to keep
+// in step rather than two. Kept across refreshes, since a source that polls rebuilds the
+// legend each time and a kind someone hid has to stay hidden.
+let off = new Set();
+// Categories whose subtypes are showing. Folded is the default, since a category can have
+// dozens of them; like `off`, it outlives the legend's rebuilds.
+let unfolded = new Set();
+const leafKey = (category, subtype) => (category || '') + '\u0000' + (subtype || '');
+const isOn = p => !off.has(leafKey(p.category, p.subtype));
 let pending = null;
 const poiLayer = L.layerGroup().addTo(map);
 
@@ -427,17 +493,29 @@ const LABEL_ANY_ZOOM_UNDER = 40;
 // the middle of the screen win, because that is what the view is pointed at.
 const MAX_MARKERS = 400;
 
+// Icons are drawn at their own size, which is right close up and a pile of overlapping
+// sprites on a whole-facet view where a town is a few pixels across. They shrink with the
+// zoom, by the square root so that they fade down rather than collapse, and are full size
+// from ICON_FULL_AT px per tile; ICON_MIN keeps the smallest still recognisable.
+const ICON_FULL_AT = 2;
+const ICON_MIN = 0.35;
+
+function iconScale() {
+  return Math.min(1, Math.max(ICON_MIN, Math.sqrt(tilePixels() / ICON_FULL_AT)));
+}
+
 function drawPois() {
+  map.getContainer().style.setProperty('--icon-scale', iconScale().toFixed(3));
   poiLayer.clearLayers();
-  if (pois.length === 0 || enabled.size === 0) return;
+  if (pois.length === 0) return;
 
   const view = map.getBounds().pad(0.1);
   const centre = map.getCenter();
 
   const near = [];
   for (const p of pois) {
-    if (!enabled.has(p.category)) continue;
-    const at = canvasAt(p.x, p.y);
+    if (!isOn(p)) continue;
+    const at = canvasAt(p.x, p.y, p.z);
     if (!view.contains(at)) continue;
     const dx = at.lng - centre.lng, dy = at.lat - centre.lat;
     near.push({ poi: p, at, d: dx * dx + dy * dy });
@@ -447,7 +525,7 @@ function drawPois() {
   // Whatever was just searched for is drawn even if the cap would have cut it; being
   // sent somewhere and finding no marker there is worse than one pin too many.
   if (pending && !near.slice(0, MAX_MARKERS).some(n => n.poi === pending)) {
-    near.unshift({ poi: pending, at: canvasAt(pending.x, pending.y), d: -1 });
+    near.unshift({ poi: pending, at: canvasAt(pending.x, pending.y, pending.z), d: -1 });
   }
 
   const drawing = near.slice(0, MAX_MARKERS);
@@ -468,21 +546,22 @@ function markerFor(p, at, labelled) {
     riseOnHover: true,
     icon: L.divIcon({
       className: 'poi',
-      html: glyph(p.category, false) + (labelled ? `<span>${esc(p.name)}</span>` : ''),
+      html: glyph(p.category, false, p.icon, p.subtype) + (labelled && lookOf(p.category, p.subtype).label !== false ? `<span>${esc(p.name)}</span>` : ''),
       iconSize: null,
       iconAnchor: [0, 0],
       popupAnchor: [0, -8],
     }),
   });
 
-  if (!labelled)
-    marker.bindTooltip(esc(p.name), { direction: 'top', offset: [0, -8] });
+  const icon = p.icon || lookOf(p.category, p.subtype).icon;
+  marker.bindTooltip((icon ? `<img class="tip" src="${esc(icon)}" alt="">` : '') + esc(p.name),
+    { direction: 'top', offset: [0, -8] });
 
   // autoPan would move the map, which would redraw the markers, which would reopen this
   // popup: the view is already centred on it by the time it opens.
   marker.bindPopup(
-    `<div class="pop"><b>${esc(p.name)}</b>` +
-    (p.category ? `<div class="cat">${esc(p.category)}</div>` : '') +
+    `<div class="pop">${icon ? `<img class="tip" src="${esc(icon)}" alt="">` : ''}<b>${esc(p.name)}</b>` +
+    (p.category ? `<div class="cat">${esc(p.category)}${p.subtype ? ' › ' + esc(p.subtype) : ''}</div>` : '') +
     (p.description ? `<div class="desc">${esc(p.description)}</div>` : '') +
     `<div class="at">${p.x}, ${p.y}, ${p.z}</div></div>`,
     { autoPan: false });
@@ -528,7 +607,7 @@ function search(query) {
   for (const p of pois) {
     // A kind that has been switched off is one the reader has said they do not care
     // about, so it should not be what a search sends them to either.
-    if (!enabled.has(p.category)) continue;
+    if (!isOn(p)) continue;
     const i = p.key.indexOf(q);
     if (i < 0) continue;
     // What someone types is far more often the start of a name than the middle of one,
@@ -602,35 +681,60 @@ $hits.addEventListener('click', e => {
 document.getElementById('go').addEventListener('click', go);
 
 function listKinds() {
-  const counts = new Map();
+  const groups = new Map();
   // Where a kind sits in the legend, set by rebuild(). A kind that two sources share
   // belongs to the earlier one.
-  const rank = new Map();
   for (const p of pois) {
-    counts.set(p.category, (counts.get(p.category) || 0) + 1);
-    rank.set(p.category, Math.min(rank.get(p.category) ?? Infinity, p.rank));
+    let g = groups.get(p.category);
+    if (!g) groups.set(p.category, g = { category: p.category, count: 0, rank: Infinity, subs: new Map() });
+    g.count++;
+    g.rank = Math.min(g.rank, p.rank);
+    g.subs.set(p.subtype, (g.subs.get(p.subtype) || 0) + 1);
   }
 
-  // A refresh rebuilds this list, and a kind someone switched off has to stay off.
-  const was = new Map(kinds.map(k => [k.category, k.on]));
-
-  kinds = [...counts]
-    .map(([category, count]) => ({ category, count, on: was.get(category) ?? true }))
+  kinds = [...groups.values()]
     // The bucket for records that named no kind is not itself a kind, so it goes last.
     // Otherwise by source, then by the order its "types" block lists them in. A kind a
     // source does not list comes after the ones it does, alphabetically.
     .sort((a, b) => (!a.category) - (!b.category) ||
-      rank.get(a.category) - rank.get(b.category) || a.category.localeCompare(b.category));
+      a.rank - b.rank || a.category.localeCompare(b.category));
+
+  for (const k of kinds) {
+    // Subtypes in the order the type lists them; unlisted ones after, alphabetically, and
+    // the records that named none last, as the kind-less bucket does.
+    const order = [...(lookOf(k.category).subtypes?.keys() ?? [])];
+    const at = s => { const i = order.indexOf(fold(s)); return i < 0 ? order.length : i; };
+    k.subs = [...k.subs]
+      .map(([subtype, count]) => ({ subtype, count }))
+      .sort((a, b) => (!a.subtype) - (!b.subtype) || at(a.subtype) - at(b.subtype) ||
+        a.subtype.localeCompare(b.subtype));
+  }
 
   // Data with no kinds in it at all reduces to the single switch this replaced, and
   // calling that one row "uncategorised" would be pedantry.
   const solo = kinds.length === 1 && !kinds[0].category;
 
-  $kinds.innerHTML = kinds.map((k, i) =>
-    '<label><input type="checkbox"' + (k.on ? ' checked' : '') + ' data-i="' + i + '">' +
-    (lookOf(k.category).icon || lookOf(k.category).color ? glyph(k.category, true) : '') +
-    `<span class="of">${esc(solo ? 'markers' : k.category || 'uncategorised')}</span>` +
-    `<span class="n">${k.count}</span></label>`).join('');
+  const anyRefined = kinds.some(k => k.subs.some(s => s.subtype));
+
+  $kinds.innerHTML = kinds.map((k, i) => {
+    // A kind whose records all name no subtype has nothing to refine, so no rows under it.
+    const refined = k.subs.some(s => s.subtype);
+    const shown = unfolded.has(k.category);
+    return '<label>' +
+      (refined
+        ? `<button type="button" class="fold${shown ? ' open' : ''}" data-c="${i}" aria-label="show subtypes"></button>`
+        : anyRefined ? '<span class="gap"></span>' : '') +
+      '<input type="checkbox" data-i="' + i + '">' +
+      (lookOf(k.category).icon || lookOf(k.category).color ? glyph(k.category, true) : '') +
+      `<span class="of">${esc(solo ? 'markers' : k.category || 'uncategorised')}</span>` +
+      `<span class="n">${k.count}</span></label>` +
+      (refined ? `<div class="subs${shown ? '' : ' shut'}">` + k.subs.map((s, j) =>
+        '<label class="sub"><input type="checkbox" data-i="' + i + '" data-j="' + j + '">' +
+        ((lookOf(k.category, s.subtype).icon || lookOf(k.category, s.subtype).color)
+          ? glyph(k.category, true, '', s.subtype) : '') +
+        `<span class="of">${esc(s.subtype || 'other')}</span>` +
+        `<span class="n">${s.count}</span></label>`).join('') + '</div>' : '');
+  }).join('');
 
   // A source that has never answered is said so, by name when there is more than one to
   // tell apart. One that answered once and then failed keeps its markers and stays quiet.
@@ -643,15 +747,43 @@ function listKinds() {
   syncKinds();
 }
 
+// Checkboxes follow `off`, not the other way round. A kind's own box is checked when all of
+// its subtypes are, and half-way when only some are.
 function syncKinds() {
-  enabled = new Set(kinds.filter(k => k.on).map(k => k.category));
+  for (const box of $kinds.querySelectorAll('input')) {
+    const k = kinds[box.dataset.i];
+    const mine = box.dataset.j === undefined ? k.subs : [k.subs[box.dataset.j]];
+    const on = mine.filter(s => !off.has(leafKey(k.category, s.subtype))).length;
+    box.checked = on === mine.length;
+    box.indeterminate = on > 0 && on < mine.length;
+  }
 }
+
+// The arrow sits inside the category's label, so the click has to be kept from reaching the
+// checkbox that label belongs to.
+$kinds.addEventListener('click', e => {
+  const arrow = e.target.closest('.fold');
+  if (!arrow) return;
+  e.preventDefault();
+
+  const category = kinds[arrow.dataset.c].category;
+  const shown = !unfolded.has(category);
+  if (shown) unfolded.add(category); else unfolded.delete(category);
+  arrow.classList.toggle('open', shown);
+  arrow.parentElement.nextElementSibling.classList.toggle('shut', !shown);
+});
 
 $kinds.addEventListener('change', e => {
   const i = e.target.dataset.i;
   if (i === undefined) return;
 
-  kinds[i].on = e.target.checked;
+  const k = kinds[i];
+  const mine = e.target.dataset.j === undefined ? k.subs : [k.subs[e.target.dataset.j]];
+  for (const s of mine) {
+    const key = leafKey(k.category, s.subtype);
+    if (e.target.checked) off.delete(key); else off.add(key);
+  }
+
   syncKinds();
   // The result list is drawn through the same filter, so it cannot be left showing hits
   // for a kind that was just switched off.
@@ -665,7 +797,7 @@ map.on('moveend zoomend', drawPois);
 // first, then each fetched source as the configuration listed them, so a later one
 // overrides an earlier one however the responses happen to arrive.
 const sources = [
-  ...(POIS ? [{ name: 'embedded', data: readPois(POIS), failure: '' }] : []),
+  ...(POIS ? [{ name: 'embedded', data: readPois(POIS, { name: 'embedded' }), failure: '' }] : []),
   ...CFG.poiSources.map(s => ({ ...s, data: null, failure: '', attempted: false })),
 ];
 
@@ -681,7 +813,7 @@ function rebuild() {
     const order = [...src.data.types.keys()];
     for (const p of src.data.pois) {
       const at = order.indexOf(fold(p.category));
-      p.rank = i * SOURCE_STRIDE + (at < 0 ? SOURCE_STRIDE - 1 : at);
+      p.rank = (p.order ?? src.order ?? i) * SOURCE_STRIDE + (at < 0 ? SOURCE_STRIDE - 1 : at);
     }
     pois.push(...src.data.pois);
     for (const [category, look] of src.data.types) looks.set(category, look);

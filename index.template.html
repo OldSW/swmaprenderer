@@ -116,6 +116,7 @@
     margin: 8px 12px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   .leaflet-popup-content b { color: #ffd479; }
+  .leaflet-popup-content b a { color: inherit; text-decoration: underline dotted; }
   .leaflet-container a.leaflet-popup-close-button { color: #7c7c88; }
   .pop .cat { color: #9fd0ff; }
   .pop .desc { color: #c8c8d0; white-space: normal; max-width: 18em; }
@@ -369,7 +370,7 @@ const pluck = (o, path) => String(path).split('.')
 // something else. Mirrors PointsOfInterest.Remap, which does the same for a file.
 function remap(r, f) {
   const c = { ...r };
-  for (const k of ['name', 'category', 'subtype', 'description', 'icon', 'mapId'])
+  for (const k of ['name', 'category', 'subtype', 'description', 'icon', 'url', 'mapId'])
     if (f[k]) c[k] = pluck(r, f[k]);
 
   if (f.position) c.position = pluck(r, f.position);
@@ -419,6 +420,7 @@ function readPois(raw, src = {}) {
       x: at.x, y: at.y, z: at.z,
       description: text(r.description) || text(r.desc),
       icon: text(r.icon),
+      url: linkOf(text(r.url) || text(r.link)),
       // Only the embedded list is ours; a third party's own "order" means something else.
       order: src.name === 'embedded' && Number.isInteger(r.order) ? r.order : undefined,
       key: fold(name + ' ' + category + ' ' + subtype),
@@ -429,6 +431,10 @@ function readPois(raw, src = {}) {
 }
 
 const text = v => typeof v === 'string' ? v.trim() : '';
+
+// A link is only ever followed if it is http(s) or relative: a record from a third party's
+// API must not be able to plant a `javascript:` URL in a popup.
+const linkOf = v => /^https?:/i.test(v) || (v && !/^[a-z][a-z0-9+.-]*:/i.test(v)) ? v : '';
 
 function place(o) {
   if (!o || typeof o !== 'object') return null;
@@ -560,7 +566,7 @@ function markerFor(p, at, labelled) {
   // autoPan would move the map, which would redraw the markers, which would reopen this
   // popup: the view is already centred on it by the time it opens.
   marker.bindPopup(
-    `<div class="pop">${icon ? `<img class="tip" src="${esc(icon)}" alt="">` : ''}<b>${esc(p.name)}</b>` +
+    `<div class="pop">${icon ? `<img class="tip" src="${esc(icon)}" alt="">` : ''}<b>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.name)}</a>` : esc(p.name)}</b>` +
     (p.category ? `<div class="cat">${esc(p.category)}${p.subtype ? ' › ' + esc(p.subtype) : ''}</div>` : '') +
     (p.description ? `<div class="desc">${esc(p.description)}</div>` : '') +
     `<div class="at">${p.x}, ${p.y}, ${p.z}</div></div>`,

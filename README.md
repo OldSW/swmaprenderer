@@ -247,7 +247,7 @@ read it, because the API cannot be asked to change:
   A `types` entry here wins over one in the source's own response.
 
 - `fields` says where in a record each property is, as dotted paths (`"pos.east"`, `"loc.0"`).
-  It can map `name`, `category`, `description`, `icon`, `mapId`, `position` (the path of an object
+  It can map `name`, `category`, `description`, `icon`, `url`, `mapId`, `position` (the path of an object
   with `x`, `y`, `z`), and `x`, `y`, `z` separately for an API that keeps the coordinates
   apart:
 
@@ -301,6 +301,11 @@ A single marker can carry its own `icon` too, in the record itself, and it wins 
 the marker's type. It is a URL resolved by the browser like the type's, and a source's `fields`
 can map it from the API's own property. Only the marker on the map uses it; the legend still
 shows the type's.
+
+A marker can also carry a `url` (or `link`), a page about it. Its popup makes the marker's name that
+link, opening in a new tab. Only `http(s)` and relative URLs are followed: anything else, `javascript:`
+above all, is dropped, because a record from someone else's API must not be able to put a script
+in the popup. A source's `fields` can map it from the API's own property.
 
 #### Subtypes
 

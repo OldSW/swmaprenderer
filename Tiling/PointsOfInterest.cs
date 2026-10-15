@@ -7,7 +7,7 @@ using SwMapRenderer.Map;
 namespace SwMapRenderer.Tiling;
 
 /// <summary>One marker, in the canonical shape the viewer consumes.</summary>
-public readonly record struct Poi(string Name, int X, int Y, int Z, string? Category, string? Description, string? Icon = null, int? Order = null, string? Subtype = null);
+public readonly record struct Poi(string Name, int X, int Y, int Z, string? Category, string? Description, string? Icon = null, int? Order = null, string? Subtype = null, string? Url = null);
 
 /// <summary>
 /// How markers of one category look: a picture, or failing that the colour of the dot. A
@@ -122,7 +122,8 @@ public sealed class PointsOfInterest
             kept.Add(new Poi(name, x, y, z,
                 First(record.Category, record.Type, source?.Category),
                 First(record.Description, record.Desc),
-                First(record.Icon), source?.Order, First(record.Subtype, record.Subcategory)));
+                First(record.Icon), source?.Order, First(record.Subtype, record.Subcategory),
+                First(record.Url, record.Link)));
         }
 
         Sort(kept);
@@ -208,7 +209,7 @@ public sealed class PointsOfInterest
     /// </summary>
     public static readonly IReadOnlySet<string> MappableFields = new HashSet<string>
     {
-        "name", "category", "subtype", "description", "icon", "mapId", "position", "x", "y", "z",
+        "name", "category", "subtype", "description", "icon", "url", "mapId", "position", "x", "y", "z",
     };
 
     /// <summary>
@@ -232,7 +233,7 @@ public sealed class PointsOfInterest
 
             var record = JsonNode.Parse(element.GetRawText())!.AsObject();
 
-            foreach (string name in (string[])["name", "category", "subtype", "description", "icon"])
+            foreach (string name in (string[])["name", "category", "subtype", "description", "icon", "url"])
             {
                 if (fields.TryGetValue(name, out string? path))
                     record[name] = Pluck(element, path) is { } v ? JsonNode.Parse(v.GetRawText()) : null;
@@ -447,6 +448,10 @@ public sealed class PointsOfInterest
 
         /// <summary>This marker's own picture, which wins over its category's.</summary>
         public string? Icon { get; set; }
+
+        /// <summary>A page about this marker, which its popup links to.</summary>
+        public string? Url { get; set; }
+        public string? Link { get; set; }
 
         public int? MapId { get; set; }
 

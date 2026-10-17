@@ -822,6 +822,15 @@ through for tile data and options. Passing it explicitly keeps that code testabl
   where their shared corner was by ~0.005px. Tile edges run at exactly 45 degrees, which lays
   that sliver over a whole diagonal of pixel centres at once, and every pixel along it fell
   outside both tiles — a one-pixel black seam clean across the terrain. See `LandObject.UpdateCorners`.
+- **Statics well below their tile's land are pushed behind it in depth.** Depth follows true
+  height, so a wall built at z=-20 under open ground has a top that reaches above the land
+  and is painted over the grass; ClassicUO draws back to front and the nearer land covers it.
+  `StaticObject.BuryBelowLand` clamps the depth (not the screen position) of any static more
+  than 5 units under its own tile's land to just below the lowest corner of that tile (the
+  surface can slope away under the tile's own z). Where there is no land to
+  draw (a nodraw hole) the static still shows.
+  Water statics are held to a stricter rule -- buried when level with or below *dry* land -- because
+  they are flat floor tiles and otherwise show as diamonds of sea along a beach.
 - **Terrain texture validity is tested at the tile's `TexID`, not at its land id.** CentrED
   checks the texmap entry at the land id, which is an unrelated index.
 - **The texture-grouping `DrawBatcher`s are gone.** They exist to cut GPU state changes and have

@@ -45,7 +45,7 @@ public readonly struct IsoProjection
 
     /// <summary>Height the camera sits at, and the far plane. CentrED's 128 * 6 and 128 * 12.</summary>
     private const double CameraHeight = 128 * 6;
-    private const double DepthRange = 128 * 12;
+    public const double DepthRange = 128 * 12;
 
     /// <summary>Canvas pixel that world (0, 0, 0) projects to.</summary>
     public double OriginX { get; }

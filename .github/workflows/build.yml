@@ -48,6 +48,12 @@ jobs:
             -p:DebugType=none \
             --output publish/${{ matrix.rid }}
 
+      # DebugType=none does not reach the .pdb that ships inside the SkiaSharp package, which
+      # on Windows is ~90 MB, about half of the unpacked download.
+      - name: Drop debug symbols
+        shell: bash
+        run: find publish/${{ matrix.rid }} -name '*.pdb' -delete
+
       - name: Stage package
         shell: bash
         run: |

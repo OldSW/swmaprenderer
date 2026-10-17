@@ -22,11 +22,11 @@ public sealed class SceneRenderer
 {
     private readonly MapScene _scene;
     private readonly RenderOptions _options;
-    private readonly Rasterizer _rasterizer;
+    private readonly IRasterizer _rasterizer;
     private readonly MapRenderer _renderer;
     private readonly MapEffect _effect;
 
-    public Rasterizer Output => _rasterizer;
+    public IRasterizer Output => _rasterizer;
 
     /// <param name="width">Canvas width. Defaults to the configured output width.</param>
     /// <param name="height">Canvas height. Defaults to the configured output height.</param>
@@ -35,7 +35,7 @@ public sealed class SceneRenderer
         _scene = scene;
         _options = scene.Options;
 
-        _rasterizer = new Rasterizer(width ?? _options.Width, height ?? _options.Height);
+        _rasterizer = Gpu.RasterizerFactory.Create(_options, width ?? _options.Width, height ?? _options.Height);
         _renderer = new MapRenderer(_rasterizer);
         _effect = new MapEffect(scene.Files.Hues);
     }

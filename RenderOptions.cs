@@ -30,7 +30,7 @@ public sealed class RenderOptions
     public string Output { get; set; } = "map.png";
 
     /// <summary>
-    /// Image format: png, jpg, gif, webp or webp-lossless.
+    /// Image format: png, jpg, webp or webp-lossless.
     ///
     /// Left unset a single image follows its output extension, and a pyramid uses PNG. Setting
     /// it explicitly overrides both.
@@ -180,6 +180,27 @@ public sealed class RenderOptions
     /// </summary>
     public string? Start { get; set; }
 
+    /// <summary>
+    /// The public URL the pyramid is served from, e.g. <c>https://maps.example.com/felucca/</c>.
+    /// It only feeds the page's Open Graph tags: Discord needs an absolute URL for the preview
+    /// image. Left out, the page still gets a title and description but no image.
+    ///
+    /// Only the viewer uses it; a single image ignores it.
+    /// </summary>
+    public string? BaseUrl { get; set; }
+
+    /// <summary>
+    /// Rasterize on the GPU, through Vulkan or OpenCL, instead of on the CPU. Geometry is still built on the
+    /// CPU, so the gain is in the pixel work: large canvases and deep, dense views. If no OpenCL
+    /// device can be set up the run says so and carries on in software.
+    /// </summary>
+    public bool Gpu { get; set; }
+
+    /// <summary>
+    /// Which API --gpu uses: <c>vulkan</c>, <c>opencl</c>, or <c>auto</c> (Vulkan, then OpenCL).
+    /// </summary>
+    public string GpuApi { get; set; } = "auto";
+
     /// <summary>Slices to render at once. 0 uses every core.</summary>
     public int Threads { get; set; }
 
@@ -306,7 +327,7 @@ public sealed class RenderOptions
         if (!IsTiling && Format == null && ImageOutput.FromPath(Output) == null)
         {
             errors.Add($"Cannot tell the format from '{Output}'. Use a known extension " +
-                       $"(.png, .jpg, .gif, .webp) or pass --format.");
+                       $"(.png, .jpg, .webp) or pass --format.");
         }
 
         if (Background != null && ParseColor(Background) == null)
@@ -401,6 +422,11 @@ public sealed class RenderOptions
         if (CachedBlocks < 64)
             errors.Add($"CachedBlocks must be at least 64 (got {CachedBlocks}).");
 
+        if (!string.IsNullOrWhiteSpace(BaseUrl) &&
+            !(Uri.TryCreate(BaseUrl, UriKind.Absolute, out var baseUri) &&
+              baseUri.Scheme is "http" or "https"))
+            errors.Add($"BaseUrl '{BaseUrl}' is not an absolute http(s) URL.");
+
         if (Start != null && ParseStart(Start) == null)
             errors.Add($"Start '{Start}' is not a tile and an optional zoom level, e.g. 1420,1690 or 1420,1690,4.5.");
 
@@ -415,6 +441,9 @@ public sealed class RenderOptions
 
         if (MaxZoom >= 0 && MaxZoom < MinZoom)
             errors.Add($"MaxZoom ({MaxZoom}) must not be below MinZoom ({MinZoom}).");
+
+        if (!Rendering.Gpu.RasterizerFactory.Apis.Contains(GpuApi, StringComparer.OrdinalIgnoreCase))
+            errors.Add($"GpuApi '{GpuApi}' is not one of {string.Join(", ", Rendering.Gpu.RasterizerFactory.Apis)}.");
 
         if (Threads < 0)
             errors.Add($"Threads must not be negative (got {Threads}).");

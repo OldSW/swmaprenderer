@@ -26,6 +26,10 @@ public sealed class ProgressBar
     /// <summary>The work is only known once the plan is, which is after the bar is built.</summary>
     public void SetTotal(int total) => Volatile.Write(ref _total, Math.Max(total, 1));
 
+    public int Total => Volatile.Read(ref _total);
+
+    public int Done => Volatile.Read(ref _done);
+
     public static bool IsSupported => !Console.IsErrorRedirected;
 
     /// <summary>Names the stage shown beside the bar, e.g. "level 8".</summary>
@@ -35,9 +39,12 @@ public sealed class ProgressBar
             _phase = phase;
     }
 
-    public void Tick()
+    public void Tick() => Advance(1);
+
+    /// <summary>Counts <paramref name="count"/> slices done at once.</summary>
+    public void Advance(int count)
     {
-        int n = Interlocked.Increment(ref _done);
+        int n = Interlocked.Add(ref _done, count);
 
         long now = _clock.ElapsedTicks;
         if (n < Volatile.Read(ref _total) && now - Volatile.Read(ref _lastDraw) < RedrawTicks)
@@ -63,6 +70,7 @@ public sealed class ProgressBar
 
         string tail = $" {fraction,4:P0}  {n:N0}/{_total:N0}";
         double elapsed = _clock.Elapsed.TotalSeconds;
+        tail += $"  {Span(TimeSpan.FromSeconds(elapsed))} elapsed";
         if (n >= 20 && n < _total)
             tail += $"  ETA {Span(TimeSpan.FromSeconds(elapsed / n * (_total - n)))}";
         if (_phase.Length > 0)

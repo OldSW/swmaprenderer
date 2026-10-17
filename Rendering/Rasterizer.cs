@@ -24,6 +24,21 @@ public struct ScreenVertex
 }
 
 /// <summary>
+/// What the geometry code draws into: a framebuffer that takes triangles in order and gives back
+/// straight-alpha RGBA. <see cref="Rasterizer"/> does the work immediately on the CPU;
+/// <see cref="Gpu.GpuRasterizerBase"/> only records the triangles and does it all at
+/// <see cref="CopyTo"/>.
+/// </summary>
+public interface IRasterizer
+{
+    int Width { get; }
+    int Height { get; }
+    void Clear(Vector4 color);
+    void DrawTriangle(in ScreenVertex v0, in ScreenVertex v1, in ScreenVertex v2, Sprite texture, MapEffect effect);
+    void CopyTo(Span<byte> rgba);
+}
+
+/// <summary>
 /// Software replacement for the fixed-function half of the GPU pipeline: triangle setup,
 /// rasterization, depth testing and blending.
 ///
@@ -34,7 +49,7 @@ public struct ScreenVertex
 /// Because the projection is orthographic, w is 1 everywhere and attribute interpolation can
 /// be plain affine barycentric, with no perspective correction to get wrong.
 /// </summary>
-public sealed class Rasterizer
+public sealed class Rasterizer : IRasterizer
 {
     public int Width { get; }
     public int Height { get; }

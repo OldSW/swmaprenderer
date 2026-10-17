@@ -20,11 +20,23 @@ public static class LeafletViewer
     public const string FileName = "index.html";
 
     /// <summary>
+    /// <c>index.php</c> in the repository root: answers a link with a position in it with
+    /// preview tags and an image of that position, which a static page cannot do.
+    /// </summary>
+    public const string PreviewScriptName = "index.php";
+
+    /// <summary>
     /// What a template has to contain for the page to know anything about the pyramid. The
     /// markers placeholder is optional: a template that never shows markers can leave it out.
     /// </summary>
     public const string ConfigPlaceholder = "/*__CONFIG__*/null";
     public const string PoisPlaceholder = "/*__POIS__*/null";
+
+    /// <summary>
+    /// Replaced with the Open Graph tags that let Discord and friends preview the link. Optional,
+    /// like the markers: a template without it simply has no preview.
+    /// </summary>
+    public const string SocialPlaceholder = "<!--__OG__-->";
 
     private static readonly JsonSerializerOptions ConfigOptions = new()
     {
@@ -51,7 +63,8 @@ public static class LeafletViewer
     /// placeholders. Null for the built-in.</param>
     public static string Write(SliceGrid grid, PyramidPlan plan, int mapIndex, string outputDirectory,
         ImageFormat format, PointsOfInterest? embedded = null, IReadOnlyList<PoiSource>? fetched = null,
-        string? templatePath = null, (int X, int Y, double? Zoom)? start = null)
+        string? templatePath = null, (int X, int Y, double? Zoom)? start = null,
+        string? baseUrl = null)
     {
         var config = new
         {
@@ -88,11 +101,59 @@ public static class LeafletViewer
         string template = templatePath is null ? DefaultTemplate() : File.ReadAllText(templatePath);
         string html = template
             .Replace(ConfigPlaceholder, JsonSerializer.Serialize(config, ConfigOptions))
-            .Replace(PoisPlaceholder, Markers(embedded));
+            .Replace(PoisPlaceholder, Markers(embedded))
+            .Replace(SocialPlaceholder, SocialTags(grid, plan, baseUrl, format.Extension, start));
 
         string path = Path.Combine(outputDirectory, FileName);
         File.WriteAllText(path, html);
+
+        // Beside the page, where it has to be to find the tiles. Always rewritten: it is part
+        // of the program, not something to edit in the output.
+        File.WriteAllText(Path.Combine(outputDirectory, PreviewScriptName), Embedded(PreviewScriptName));
         return path;
+    }
+
+    /// <summary>
+    /// Crawlers do not run scripts, so the preview has to be in the HTML itself, and Discord
+    /// ignores an <c>og:image</c> that is not an absolute URL -- hence the base URL. The image is
+    /// the slice holding --start at its level, or the single slice at the shallowest level
+    /// (the whole facet when --min-zoom is 0) when there is no start; without a base URL the image is left out rather than written as a link that cannot work.
+    /// </summary>
+    private static string SocialTags(SliceGrid grid, PyramidPlan plan, string? baseUrl, string extension,
+        (int X, int Y, double? Zoom)? start)
+    {
+        var tags = new List<string>
+        {
+            "<meta property=\"og:type\" content=\"website\">",
+            "<meta property=\"og:title\" content=\"Ultima Online map\">",
+            "<meta property=\"og:description\" content=\"Browse the map: search places, zoom in, and share a position.\">",
+            "<meta name=\"twitter:card\" content=\"summary_large_image\">",
+        };
+
+        if (!string.IsNullOrWhiteSpace(baseUrl))
+        {
+            string root = baseUrl.TrimEnd('/') + "/";
+
+            // The page's own hash never reaches a server, so a crawler cannot be shown where a
+            // particular visitor was looking. What it can be shown is where the page opens: the
+            // slice, at the start's level, that holds the start tile.
+            int level = plan.MinZoom;
+            int sliceX = 0, sliceY = 0;
+            if (start is { } s)
+            {
+                level = Math.Clamp((int)Math.Round(s.Zoom ?? plan.MaxZoom - 1), plan.MinZoom, plan.MaxZoom);
+                var (cx, cy) = grid.CanvasAt(s.X, s.Y);
+                long per = grid.PixelsPerSlice(level);
+                sliceX = (int)Math.Clamp((long)Math.Floor(cx / per), 0, grid.SlicesAcross(level) - 1);
+                sliceY = (int)Math.Clamp((long)Math.Floor(cy / per), 0, grid.SlicesDown(level) - 1);
+            }
+
+            string image = System.Net.WebUtility.HtmlEncode($"{root}{level}/{sliceX}/{sliceY}{extension}");
+            tags.Add($"<meta property=\"og:url\" content=\"{System.Net.WebUtility.HtmlEncode(root)}\">");
+            tags.Add($"<meta property=\"og:image\" content=\"{image}\">");
+        }
+
+        return string.Join(Environment.NewLine, tags);
     }
 
     /// <summary>
@@ -116,10 +177,12 @@ public static class LeafletViewer
     /// binary so that a run needs nothing beside it. It is one file on purpose: it is both what
     /// gets written and what someone copies to start their own with --template.
     /// </summary>
-    private static string DefaultTemplate()
+    private static string DefaultTemplate() => Embedded(DefaultTemplateResource);
+
+    private static string Embedded(string name)
     {
-        using var stream = typeof(LeafletViewer).Assembly.GetManifestResourceStream(DefaultTemplateResource)
-            ?? throw new InvalidOperationException($"The embedded page '{DefaultTemplateResource}' is missing.");
+        using var stream = typeof(LeafletViewer).Assembly.GetManifestResourceStream(name)
+            ?? throw new InvalidOperationException($"The embedded file '{name}' is missing.");
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }

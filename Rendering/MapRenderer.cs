@@ -13,13 +13,13 @@ namespace SwMapRenderer.Rendering;
 /// </summary>
 public sealed class MapRenderer
 {
-    private readonly Rasterizer _rasterizer;
+    private readonly IRasterizer _rasterizer;
 
     private MapEffect? _effect;
     private IsoProjection _projection;
     private bool _beginCalled;
 
-    public MapRenderer(Rasterizer rasterizer)
+    public MapRenderer(IRasterizer rasterizer)
     {
         _rasterizer = rasterizer;
     }

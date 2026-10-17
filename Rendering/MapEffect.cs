@@ -35,6 +35,8 @@ public sealed class MapEffect
 
     private readonly HuesFile _hues;
 
+    public HuesFile Hues => _hues;
+
     public Technique CurrentTechnique { get; set; } = Technique.Terrain;
 
     public MapEffect(HuesFile hues)

@@ -1,11 +1,4 @@
 using System.Numerics;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats;
-using SixLabors.ImageSharp.Formats.Gif;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.Formats.Webp;
-using SixLabors.ImageSharp.PixelFormats;
 
 namespace SwMapRenderer;
 
@@ -16,30 +9,27 @@ namespace SwMapRenderer;
 /// <param name="Extension">File extension, including the dot.</param>
 /// <param name="SupportsAlpha">
 /// Whether transparency survives. JPEG has none at all, so anything transparent has to be
-/// flattened onto an opaque colour before encoding; GIF carries a single fully transparent
-/// palette entry, which is enough for this renderer because the art's own alpha is binary.
+/// flattened onto an opaque colour before encoding.
 /// </param>
 /// <param name="IsLossy">Whether <c>--quality</c> applies.</param>
 public sealed record ImageFormat(string Name, string Extension, bool SupportsAlpha, bool IsLossy)
 {
-    // Size and time factors are measured on real slices of this renderer's output, relative to
-    // PNG, and only feed the up-front estimate.
+    // Size and time factors are measured on a level-8 pyramid of 600x500 tiles of Britain at
+    // twelve threads, relative to PNG, and only feed the up-front estimate. PNG's zlib is the
+    // slowest encoder here, so the lossless WebP and JPEG come out faster than it.
     public static readonly ImageFormat Png =
         new("png", ".png", SupportsAlpha: true, IsLossy: false);
 
     public static readonly ImageFormat Jpeg =
-        new("jpg", ".jpg", SupportsAlpha: false, IsLossy: true) { SizeFactor = 0.27 };
-
-    public static readonly ImageFormat Gif =
-        new("gif", ".gif", SupportsAlpha: true, IsLossy: false) { SizeFactor = 0.54 };
+        new("jpg", ".jpg", SupportsAlpha: false, IsLossy: true) { SizeFactor = 0.22, TimeFactor = 0.76 };
 
     public static readonly ImageFormat Webp =
-        new("webp", ".webp", SupportsAlpha: true, IsLossy: true) { SizeFactor = 0.28, TimeFactor = 1.8 };
+        new("webp", ".webp", SupportsAlpha: true, IsLossy: true) { SizeFactor = 0.24, TimeFactor = 1.08 };
 
     public static readonly ImageFormat WebpLossless =
-        new("webp-lossless", ".webp", SupportsAlpha: true, IsLossy: false) { SizeFactor = 0.45, TimeFactor = 1.9 };
+        new("webp-lossless", ".webp", SupportsAlpha: true, IsLossy: false) { SizeFactor = 0.58, TimeFactor = 0.86 };
 
-    public static readonly IReadOnlyList<ImageFormat> All = [Png, Jpeg, Gif, Webp, WebpLossless];
+    public static readonly IReadOnlyList<ImageFormat> All = [Png, Jpeg, Webp, WebpLossless];
 
     /// <summary>
     /// Size relative to PNG for this renderer's content, from measurements on real slices. Used
@@ -61,7 +51,6 @@ public static class ImageOutput
         ["png"] = ImageFormat.Png,
         ["jpg"] = ImageFormat.Jpeg,
         ["jpeg"] = ImageFormat.Jpeg,
-        ["gif"] = ImageFormat.Gif,
         ["webp"] = ImageFormat.Webp,
         ["webp-lossless"] = ImageFormat.WebpLossless,
         ["weblossless"] = ImageFormat.WebpLossless,
@@ -72,7 +61,6 @@ public static class ImageOutput
         [".png"] = ImageFormat.Png,
         [".jpg"] = ImageFormat.Jpeg,
         [".jpeg"] = ImageFormat.Jpeg,
-        [".gif"] = ImageFormat.Gif,
         [".webp"] = ImageFormat.Webp,
     };
 
@@ -84,16 +72,6 @@ public static class ImageOutput
     /// <summary>The format a path's extension implies, or null if it is not one we write.</summary>
     public static ImageFormat? FromPath(string path) =>
         ByExtension.TryGetValue(Path.GetExtension(path), out var format) ? format : null;
-
-    private static IImageEncoder CreateEncoder(ImageFormat format, int quality) => format.Name switch
-    {
-        "png" => new PngEncoder(),
-        "jpg" => new JpegEncoder { Quality = quality },
-        "gif" => new GifEncoder(),
-        "webp" => new WebpEncoder { Quality = quality, FileFormat = WebpFileFormatType.Lossy },
-        "webp-lossless" => new WebpEncoder { FileFormat = WebpFileFormatType.Lossless },
-        _ => throw new NotSupportedException($"No encoder for '{format.Name}'."),
-    };
 
     /// <summary>
     /// Writes straight-RGBA pixels in the requested format.
@@ -109,8 +87,7 @@ public static class ImageOutput
         if (!format.SupportsAlpha)
             Flatten(rgba, flattenTo);
 
-        using var image = Image.LoadPixelData<Rgba32>(rgba, width, height);
-        image.Save(path, CreateEncoder(format, quality));
+        SkiaOutput.Save(rgba, width, height, path, format, quality);
     }
 
     /// <summary>As <see cref="Save"/>, but via a temporary file moved into place.</summary>

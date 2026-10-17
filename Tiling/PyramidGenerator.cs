@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using SwMapRenderer.Map;
 using SwMapRenderer.Rendering;
 
@@ -17,31 +15,76 @@ public readonly record struct PyramidPlan(
     (int X0, int Y0, int X1, int Y1) Region,
     bool MaxZoomWasCapped)
 {
+    /// <summary>The slice size the cost constants below were measured at (16x16 tiles, 704x704).</summary>
+    private const double ReferencePixels = 704.0 * 704.0;
+
     /// <summary>
-    /// Single-threaded seconds one slice takes, fitted to measurements on this renderer. Two
-    /// terms matter and they move independently:
+    /// CPU-seconds one rendered slice takes, summed over every thread. Two terms matter and they
+    /// move independently:
     ///
-    ///   fill     -- the slice's pixel area, which --zoom scales
+    ///   fill     -- the slice's pixels, which --zoom and --slice-tiles scale
     ///   geometry -- the tiles it covers, which --max-zoom scales
     ///
     /// A slice above the deepest level is the same number of pixels over four times the ground
-    /// per step, so counting only pixels understates it badly: at level 6 of a level-9 grid a
-    /// slice covers 16,384 tiles rather than 256, and takes about twice as long as a native one.
+    /// per step, so counting only pixels understates it badly: at level 5 of a level-9 grid a
+    /// slice covers 65,536 tiles rather than 256, and takes over three times as long as a native
+    /// one. Both constants were measured on 600x500 tiles of Britain (map 1), rendering only
+    /// (--min-zoom equal to --max-zoom, so no averaging) at 2 threads, where the CPU time does
+    /// not yet inflate with contention. The fill term is assumed to scale with the slice's pixel
+    /// count; only 704x704 slices were measured.
     /// </summary>
-    public double SerialSecondsPerSlice =>
-        0.009
-        + 3.3e-7 * (double)Grid.SliceSize * Grid.SliceSize
-        + 8.8e-6 * Grid.TilesCoveredPerSlice(MaxZoom);
-
-    /// <summary>Megabytes one slice takes on disk, from the same measurements.</summary>
-    public double MegabytesPerSlice => 1.0e-6 * (double)Grid.SliceSize * Grid.SliceSize;
+    public double CpuSecondsPerRenderedSlice =>
+        0.085 * Grid.SliceSize * Grid.SliceSize / ReferencePixels
+        + 3.0e-6 * Grid.TilesCoveredPerSlice(MaxZoom);
 
     /// <summary>
-    /// Wall-clock estimate. Scaling is not linear in threads -- the measured speedup was about
-    /// 7x on twelve -- so the thread count is discounted rather than taken at face value.
+    /// CPU-seconds one averaged slice takes: the 2x2 average plus encoding the result. The
+    /// children are averaged from memory, so nothing is decoded.
     /// </summary>
-    public TimeSpan Estimate(int threads) =>
-        TimeSpan.FromSeconds(NativeSliceCount * SerialSecondsPerSlice / Math.Max(1, threads * 0.65));
+    public double CpuSecondsPerAveragedSlice => 0.041 * Grid.SliceSize * Grid.SliceSize / ReferencePixels;
+
+    /// <summary>Slices built by averaging rather than rendering.</summary>
+    public int AveragedSliceCount => TotalSliceCount - NativeSliceCount;
+
+    /// <summary>
+    /// Megabytes one PNG slice takes on disk. Measured on land-dense terrain, so it overstates a
+    /// facet that is mostly ocean; the other formats scale from it by <see cref="ImageFormat.SizeFactor"/>.
+    /// </summary>
+    public double MegabytesPerSlice => 1.5e-6 * (double)Grid.SliceSize * Grid.SliceSize;
+
+    /// <summary>
+    /// Wall-clock estimate, fitted to 30 runs at 2, 4 and 12 threads plus 9 more at 6, 8 and 10
+    /// (levels 7 to 9, PNG) on an M2 Max, which has 8 performance cores and 4
+    /// efficiency cores. The speedup has two regimes, and the knee is at the performance cores:
+    ///
+    ///   up to 8 threads  -- nearly linear, losing about 2% per extra thread (7.0x on eight)
+    ///   past 8 threads   -- each thread lands on an efficiency core and adds about a fifth of
+    ///                       a performance core (7.8x on twelve, 10% faster than eight for 17%
+    ///                       more CPU and a third more memory)
+    ///
+    /// The knee is taken as two thirds of the logical cores, which is exactly right for the
+    /// M-series Max and a guess anywhere else. The fixed second and a half is start-up: the
+    /// client files, the shard overlays and the first slices before every thread is busy. Run
+    /// back against the measurements it lands within -18% and +13% (mean -1%), with no trend in
+    /// the thread count.
+    /// </summary>
+    public TimeSpan Estimate(int threads)
+    {
+        int fastCores = Math.Max(1, Environment.ProcessorCount * 2 / 3);
+        double cpuSeconds = NativeSliceCount * CpuSecondsPerRenderedSlice
+                            + AveragedSliceCount * CpuSecondsPerAveragedSlice;
+
+        return TimeSpan.FromSeconds(1.5 + cpuSeconds / Speedup(Math.Max(1, threads), fastCores));
+    }
+
+    private static double Speedup(int threads, int fastCores)
+    {
+        static double Fast(int t) => t * Math.Max(0.5, 1 - 0.0217 * (t - 2));
+
+        return threads <= fastCores
+            ? (threads < 2 ? threads : Fast(threads))
+            : Fast(fastCores) + 0.2 * (threads - fastCores);
+    }
 }
 
 public readonly record struct PyramidResult(
@@ -164,10 +207,14 @@ public sealed class PyramidGenerator
         int threads = _options.Threads > 0 ? _options.Threads : Environment.ProcessorCount;
         var renderers = new ConcurrentBag<SceneRenderer>();
 
+        // Z-order, so that the four slices under one parent are neighbours in the work list and
+        // finish close together. Row order would leave a whole row of slices waiting in memory
+        // for the row beneath it.
         var slices = new List<(int X, int Y)>();
         for (int y = plan.NativeSlices.Y0; y <= plan.NativeSlices.Y1; y++)
             for (int x = plan.NativeSlices.X0; x <= plan.NativeSlices.X1; x++)
                 slices.Add((x, y));
+        slices.Sort((a, b) => Morton(a.X, a.Y).CompareTo(Morton(b.X, b.Y)));
 
         int done = 0;
 
@@ -177,78 +224,84 @@ public sealed class PyramidGenerator
         {
             progress.SetTotal(slices.Count + Enumerable.Range(plan.MinZoom, Math.Max(plan.MaxZoom - plan.MinZoom, 0))
                 .Sum(z => _grid.SlicesAcross(z) * _grid.SlicesDown(z)));
-            progress.SetPhase($"level {plan.MaxZoom}");
+            progress.SetPhase($"levels {plan.MaxZoom}-{plan.MinZoom}");
         }
 
+        var cascade = new Cascade(plan, progress);
         var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = threads };
 
         Parallel.ForEach(slices, parallelOptions, slice =>
         {
             string path = SlicePath(plan.MaxZoom, slice.X, slice.Y);
+            var result = Child.Absent;
 
             if (!_options.Overwrite && File.Exists(path))
             {
                 Interlocked.Increment(ref skippedExisting);
-                ReportProgress(ref done, slices.Count, log, progress);
-                return;
+                result = Child.OnDisk;
             }
-
-            // Cheap geometric rejection, before a canvas is cleared for nothing.
-            if (!_grid.SliceTouchesFacet(plan.MaxZoom, slice.X, slice.Y, _options.MinZ, _options.MaxZ,
-                    _scene.Files.Art.MaxStaticWidth, _scene.Files.Art.MaxStaticHeight))
+            else if (!_grid.SliceTouchesFacet(plan.MaxZoom, slice.X, slice.Y, _options.MinZ, _options.MaxZ,
+                         _scene.Files.Art.MaxStaticWidth, _scene.Files.Art.MaxStaticHeight))
             {
+                // Cheap geometric rejection, before a canvas is cleared for nothing.
                 Interlocked.Increment(ref skippedEmpty);
-                ReportProgress(ref done, slices.Count, log, progress);
-                return;
             }
-
-            if (!renderers.TryTake(out var renderer))
-                renderer = new SceneRenderer(_scene, _grid.SliceSize, _grid.SliceSize);
-
-            try
+            else
             {
-                var projection = _grid.ProjectionFor(plan.MaxZoom, slice.X, slice.Y);
-                var stats = renderer.Render(projection);
+                if (!renderers.TryTake(out var renderer))
+                    renderer = new SceneRenderer(_scene, _grid.SliceSize, _grid.SliceSize);
 
-                if (stats.LandDrawn == 0 && stats.StaticsDrawn == 0 && stats.MobilesDrawn == 0)
+                try
                 {
-                    // Off the edge of the facet. Leaving the file absent is what makes the
-                    // viewer show nothing there rather than a black square.
-                    Interlocked.Increment(ref skippedEmpty);
+                    var projection = _grid.ProjectionFor(plan.MaxZoom, slice.X, slice.Y);
+                    var stats = renderer.Render(projection);
+
+                    if (stats.LandDrawn == 0 && stats.StaticsDrawn == 0 && stats.MobilesDrawn == 0)
+                    {
+                        // Off the edge of the facet. Leaving the file absent is what makes the
+                        // viewer show nothing there rather than a black square.
+                        Interlocked.Increment(ref skippedEmpty);
+                    }
+                    else
+                    {
+                        result = Child.InMemory(Save(renderer.Output, path));
+                        Interlocked.Increment(ref rendered);
+                    }
                 }
-                else
+                finally
                 {
-                    Save(renderer.Output, path);
-                    Interlocked.Increment(ref rendered);
+                    renderers.Add(renderer);
                 }
             }
-            finally
-            {
-                renderers.Add(renderer);
-            }
 
+            // Reported on every path, empty or not: a parent waits for all four children.
             ReportProgress(ref done, slices.Count, log, progress);
+            Report(cascade, plan.MaxZoom, slice.X, slice.Y, result);
         });
 
         log?.Invoke($"level {plan.MaxZoom}: {rendered} rendered, {skippedEmpty} empty, {skippedExisting} already present");
 
         for (int zoom = plan.MaxZoom - 1; zoom >= plan.MinZoom; zoom--)
         {
-            progress?.SetPhase($"level {zoom}");
-            var (written, existing) = BuildLevel(zoom, parallelOptions, progress);
+            int written = cascade.Written[zoom], existing = cascade.Existing[zoom];
             downsampled += written;
             skippedExisting += existing;
             log?.Invoke($"level {zoom}: {written} averaged from the level below, {existing} already present");
         }
 
+        // Parents outside the region were never visited; the bar should still end full.
+        progress?.Advance(Math.Max(0, progress.Total - progress.Done));
+
         stopwatch.Stop();
         return new PyramidResult(rendered, downsampled, skippedEmpty, skippedExisting, stopwatch.Elapsed);
     }
 
-    /// <summary>Ticks the bar on dispose, so every early return in a slice still counts.</summary>
-    private readonly struct Tick(ProgressBar? bar) : IDisposable
+    private static long Morton(int x, int y)
     {
-        public void Dispose() => bar?.Tick();
+        long key = 0;
+        for (int bit = 0; bit < 21; bit++)
+            key |= ((long)(x >> bit & 1) << (2 * bit)) | ((long)(y >> bit & 1) << (2 * bit + 1));
+        return key;
     }
 
     private static void ReportProgress(ref int done, int total, Action<string>? log, ProgressBar? progress)
@@ -259,138 +312,224 @@ public sealed class PyramidGenerator
             log($"  {n}/{total} slices");
     }
 
+    /// <summary>Where a slice's pixels are, as its parent will need them.</summary>
+    private readonly record struct Child(byte[]? Pixels, bool IsOnDisk)
+    {
+        /// <summary>Not drawn and not written: nothing to average.</summary>
+        public static readonly Child Absent = new(null, false);
+
+        /// <summary>Written by an earlier run, or possibly so: read it back if it is there.</summary>
+        public static readonly Child OnDisk = new(null, true);
+
+        /// <summary>Just written; these are the pixels that were encoded, so nothing is decoded again.</summary>
+        public static Child InMemory(byte[] pixels) => new(pixels, false);
+    }
+
+    /// <summary>A parent waiting for its four children, one per quadrant.</summary>
+    private sealed class Node
+    {
+        public readonly object Gate = new();
+        public readonly Child[] Slots = new Child[4];
+        public int Reported;
+    }
+
     /// <summary>
-    /// Builds one level by averaging each group of four slices from the level below. Groups with
-    /// no children at all are left absent, so empty ocean does not grow files as it rises
-    /// through the pyramid.
+    /// The averaged levels, built bottom-up as the deepest level is rendered. A parent is
+    /// averaged by whichever thread reports its fourth child, straight from the pixels that child
+    /// was encoded from, and its own pixels go up the same way -- so no slice is decoded unless a
+    /// previous run left it on disk, and none is kept longer than its siblings take to finish.
     /// </summary>
-    private (int Written, int Existing) BuildLevel(int zoom, ParallelOptions parallelOptions, ProgressBar? progress)
+    private sealed class Cascade
     {
-        int across = _grid.SlicesAcross(zoom);
-        int down = _grid.SlicesDown(zoom);
-        int size = _grid.SliceSize;
+        public readonly ConcurrentDictionary<(int X, int Y), Node>[] Nodes;
+        public readonly int[] Written, Existing;
+        public readonly ProgressBar? Progress;
+        public readonly (int X0, int Y0, int X1, int Y1)[] Active;
+        public readonly int MinZoom;
 
-        var coords = new List<(int X, int Y)>();
-        for (int y = 0; y < down; y++)
-            for (int x = 0; x < across; x++)
-                coords.Add((x, y));
-
-        int written = 0;
-        int existing = 0;
-
-        Parallel.ForEach(coords, parallelOptions, slice =>
+        public Cascade(PyramidPlan plan, ProgressBar? progress)
         {
-            using var _ = new Tick(progress);
-            string path = SlicePath(zoom, slice.X, slice.Y);
-            if (!_options.Overwrite && File.Exists(path))
+            Progress = progress;
+            MinZoom = plan.MinZoom;
+            Nodes = new ConcurrentDictionary<(int, int), Node>[plan.MaxZoom + 1];
+            Written = new int[plan.MaxZoom + 1];
+            Existing = new int[plan.MaxZoom + 1];
+            Active = new (int, int, int, int)[plan.MaxZoom + 1];
+
+            // The slices this run covers, at each level. Anything beside them may still be on
+            // disk from an earlier run, and a parent at the edge has to average those in.
+            for (int z = 0; z <= plan.MaxZoom; z++)
             {
-                Interlocked.Increment(ref existing);
-                return;
+                Nodes[z] = new();
+                int d = plan.MaxZoom - z;
+                var n = plan.NativeSlices;
+                Active[z] = (n.X0 >> d, n.Y0 >> d, n.X1 >> d, n.Y1 >> d);
             }
-
-            // Premultiply before averaging. Averaging straight alpha would drag the colour of
-            // fully transparent pixels into their neighbours, fringing every sprite edge.
-            var accum = new float[size * size * 4];
-            bool any = false;
-
-            for (int dy = 0; dy < 2; dy++)
-            {
-                for (int dx = 0; dx < 2; dx++)
-                {
-                    string childPath = SlicePath(zoom + 1, slice.X * 2 + dx, slice.Y * 2 + dy);
-                    if (!File.Exists(childPath))
-                        continue;
-
-                    using var child = Image.Load<Rgba32>(childPath);
-                    if (child.Width != size || child.Height != size)
-                        continue;
-
-                    any = true;
-                    Accumulate(child, accum, size, dx * (size / 2), dy * (size / 2));
-                }
-            }
-
-            if (!any)
-                return;
-
-            WriteAveraged(accum, size, path);
-            Interlocked.Increment(ref written);
-        });
-
-        return (written, existing);
+        }
     }
 
-    /// <summary>Averages each 2x2 block of the child into one pixel of the parent quadrant.</summary>
-    private static void Accumulate(Image<Rgba32> child, float[] accum, int size, int offsetX, int offsetY)
+    private void Report(Cascade c, int zoom, int x, int y, Child child)
     {
-        int half = size / 2;
-
-        child.ProcessPixelRows(accessor =>
+        while (zoom > c.MinZoom)
         {
-            for (int y = 0; y < half; y++)
+            int parentZoom = zoom - 1, px = x >> 1, py = y >> 1;
+            var node = c.Nodes[parentZoom].GetOrAdd((px, py), key => NewNode(c, parentZoom, key.X, key.Y));
+
+            bool complete;
+            lock (node.Gate)
             {
-                var row0 = accessor.GetRowSpan(y * 2);
-                var row1 = accessor.GetRowSpan(y * 2 + 1);
-                int destY = offsetY + y;
-
-                for (int x = 0; x < half; x++)
-                {
-                    float r = 0, g = 0, b = 0, a = 0;
-
-                    for (int i = 0; i < 2; i++)
-                    {
-                        var p = i == 0 ? row0[x * 2] : row1[x * 2];
-                        var q = i == 0 ? row0[x * 2 + 1] : row1[x * 2 + 1];
-
-                        float pa = p.A / 255f, qa = q.A / 255f;
-                        r += p.R / 255f * pa + q.R / 255f * qa;
-                        g += p.G / 255f * pa + q.G / 255f * qa;
-                        b += p.B / 255f * pa + q.B / 255f * qa;
-                        a += pa + qa;
-                    }
-
-                    int o = ((destY * size) + offsetX + x) * 4;
-                    accum[o] = r / 4f;
-                    accum[o + 1] = g / 4f;
-                    accum[o + 2] = b / 4f;
-                    accum[o + 3] = a / 4f;
-                }
+                node.Slots[(x & 1) | ((y & 1) << 1)] = child;
+                complete = ++node.Reported == 4;
             }
-        });
+
+            if (!complete)
+                return;
+
+            c.Nodes[parentZoom].TryRemove((px, py), out _);
+            child = Average(c, node, parentZoom, px, py);
+            (zoom, x, y) = (parentZoom, px, py);
+        }
     }
 
-    private void WriteAveraged(float[] accum, int size, string path)
+    private static Node NewNode(Cascade c, int zoom, int px, int py)
     {
-        var pixels = new byte[size * size * 4];
+        var node = new Node();
+        var (x0, y0, x1, y1) = c.Active[zoom + 1];
 
-        for (int i = 0; i < size * size; i++)
+        for (int i = 0; i < 4; i++)
         {
-            int o = i * 4;
-            float a = accum[o + 3];
-
-            if (a > 0f)
+            int cx = px * 2 + (i & 1), cy = py * 2 + (i >> 1);
+            if (cx < x0 || cx > x1 || cy < y0 || cy > y1)
             {
-                float inv = 1f / a;
-                pixels[o] = ToByte(accum[o] * inv);
-                pixels[o + 1] = ToByte(accum[o + 1] * inv);
-                pixels[o + 2] = ToByte(accum[o + 2] * inv);
+                node.Slots[i] = Child.OnDisk;
+                node.Reported++;
             }
-
-            pixels[o + 3] = ToByte(a);
         }
 
+        return node;
+    }
+
+    /// <summary>
+    /// Builds one parent from its four children. A parent with no children at all is left absent,
+    /// so empty ocean does not grow files as it rises through the pyramid.
+    /// </summary>
+    private Child Average(Cascade c, Node node, int zoom, int px, int py)
+    {
+        c.Progress?.Tick();
+
+        int size = _grid.SliceSize;
+        string path = SlicePath(zoom, px, py);
+
+        if (!_options.Overwrite && File.Exists(path))
+        {
+            Interlocked.Increment(ref c.Existing[zoom]);
+            return Child.OnDisk;
+        }
+
+        var pixels = new byte[size * size * 4];
+        bool any = false;
+
+        for (int i = 0; i < 4; i++)
+        {
+            var slot = node.Slots[i];
+            var data = slot.Pixels;
+
+            if (data == null && slot.IsOnDisk)
+            {
+                string childPath = SlicePath(zoom + 1, px * 2 + (i & 1), py * 2 + (i >> 1));
+                if (File.Exists(childPath))
+                {
+                    data = LoadChild(childPath, out int w, out int h);
+                    if (w != size || h != size)
+                        data = null;
+                }
+            }
+
+            node.Slots[i] = default;
+            if (data == null)
+                continue;
+
+            any = true;
+            AverageInto(data, pixels, size, (i & 1) * (size / 2), (i >> 1) * (size / 2));
+        }
+
+        if (!any)
+            return Child.Absent;
+
         ImageOutput.SaveAtomically(pixels, size, size, path, _format, _options.Quality, Backdrop);
+        Interlocked.Increment(ref c.Written[zoom]);
+        return Child.InMemory(pixels);
+    }
+
+    /// <summary>
+    /// A child slice as straight RGBA bytes. Null, with a zero size, if the file cannot be decoded.
+    /// </summary>
+    private static byte[]? LoadChild(string path, out int width, out int height) =>
+        SkiaOutput.Load(path, out width, out height);
+
+    /// <summary>
+    /// Averages each 2x2 block of the child into one pixel of the parent quadrant.
+    ///
+    /// Premultiplied before averaging: averaging straight alpha would drag the colour of fully
+    /// transparent pixels into their neighbours, fringing every sprite edge.
+    /// </summary>
+    private static void AverageInto(byte[] child, byte[] parent, int size, int offsetX, int offsetY)
+    {
+        int half = size / 2;
+        int stride = size * 4;
+
+        for (int y = 0; y < half; y++)
+        {
+            int row0 = y * 2 * stride;
+            int row1 = row0 + stride;
+            int destY = offsetY + y;
+
+            for (int x = 0; x < half; x++)
+            {
+                float r = 0, g = 0, b = 0, a = 0;
+
+                for (int i = 0; i < 2; i++)
+                {
+                    int p = (i == 0 ? row0 : row1) + x * 8;
+                    int q = p + 4;
+
+                    float pa = child[p + 3] / 255f, qa = child[q + 3] / 255f;
+                    r += child[p] / 255f * pa + child[q] / 255f * qa;
+                    g += child[p + 1] / 255f * pa + child[q + 1] / 255f * qa;
+                    b += child[p + 2] / 255f * pa + child[q + 2] / 255f * qa;
+                    a += pa + qa;
+                }
+
+                r /= 4f;
+                g /= 4f;
+                b /= 4f;
+                a /= 4f;
+
+                int o = ((destY * size) + offsetX + x) * 4;
+                if (a > 0f)
+                {
+                    float inv = 1f / a;
+                    parent[o] = ToByte(r * inv);
+                    parent[o + 1] = ToByte(g * inv);
+                    parent[o + 2] = ToByte(b * inv);
+                }
+
+                parent[o + 3] = ToByte(a);
+            }
+        }
     }
 
     private static byte ToByte(float v) => (byte)Math.Clamp((int)(v * 255f + 0.5f), 0, 255);
 
-    private void Save(Rasterizer rasterizer, string path)
+    /// <summary>Writes the slice and returns the pixels that were encoded.</summary>
+    private byte[] Save(IRasterizer rasterizer, string path)
     {
         var pixels = new byte[rasterizer.Width * rasterizer.Height * 4];
         rasterizer.CopyTo(pixels);
 
         ImageOutput.SaveAtomically(pixels, rasterizer.Width, rasterizer.Height, path, _format,
             _options.Quality, Backdrop);
+        return pixels;
     }
 
     /// <summary>

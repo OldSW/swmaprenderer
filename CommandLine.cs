@@ -63,7 +63,10 @@ public static class CommandLine
         ["--max-zoom"] = "Render:MaxZoom",
         ["--region"] = "Render:Region",
         ["--start"] = "Render:Start",
+        ["--base-url"] = "Render:BaseUrl",
         ["--threads"] = "Render:Threads",
+        ["--gpu"] = "Render:Gpu",
+        ["--gpu-api"] = "Render:GpuApi",
         ["--overwrite"] = "Render:Overwrite",
         ["--dry-run"] = "Render:DryRun",
         ["--sprite-cache"] = "Render:SpriteCacheMegabytes",
@@ -74,7 +77,7 @@ public static class CommandLine
     private static readonly HashSet<string> BooleanSwitches =
     [
         "--land", "--statics", "--nodraw", "--flat", "--prefer-texmaps", "--verbose", "-v",
-        "--overwrite", "--dry-run",
+        "--overwrite", "--dry-run", "--gpu",
     ];
 
     public static bool WantsHelp(string[] args) =>
@@ -215,7 +218,7 @@ public static class CommandLine
           -h, --height <px>       Output image height
           -z, --zoom <0.2-4.0>    Larger zooms in
           -o, --out <file>        Output image path; format follows the extension
-          -f, --format <fmt>      png | jpg | gif | webp | webp-lossless
+          -f, --format <fmt>      png | jpg | webp | webp-lossless
                                   (default: the output extension, or png for --tiles)
           -q, --quality <1-100>   Encoder quality for jpg and webp (default 85)
 
@@ -265,6 +268,9 @@ public static class CommandLine
                                   Open the page at this tile and, optionally, zoom level
                                   (default: the whole facet). A position in the URL wins
               --threads <n>       Slices to render at once (default: every core)
+              --gpu               Rasterize on the GPU instead of on the CPU; falls back to the
+                                  CPU with a warning if no device can be used
+              --gpu-api <api>     vulkan, opencl or auto (default: Vulkan, then OpenCL)
               --overwrite         Re-render slices that already exist
               --dry-run           Report what would be written and stop
 

@@ -24,6 +24,8 @@
   "min-zoom": 0,
   "max-zoom": -1,
   "threads": 0,
+  "gpu": false,
+  "gpu-api": "auto",
   "overwrite": false,
   "dry-run": false,
   "sprite-cache": 512,

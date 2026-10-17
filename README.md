@@ -42,6 +42,44 @@ so `w` is 1 everywhere and attribute interpolation is plain affine barycentric â
 perspective correction to get subtly wrong. The result has no native dependencies and runs
 anywhere .NET does.
 
+### GPU rendering
+
+`--gpu` (`Render:Gpu`) swaps the rasterizer, and only the rasterizer, for one that runs on the
+GPU (`Rendering/Gpu/`). It is optional: nothing is loaded without the switch, and if no GPU can be
+set up the run says why once and carries on on the CPU. Geometry, culling, the view range and the
+sprite caches are untouched and still run on the CPU, so the gain is in the pixel work and is
+largest for big canvases and dense views; a pyramid run is also bound by geometry and image
+encoding.
+
+`--gpu-api` (`Render:GpuApi`) picks the API: `vulkan`, `opencl`, or `auto`, the default, which tries
+Vulkan and then OpenCL. Vulkan goes through Silk.NET and needs a Vulkan runtime: your driver
+on Windows and Linux, and on a Mac MoltenVK (`brew install molten-vk`), which the program finds
+under Homebrew or `$VULKAN_SDK` without a loader. OpenCL needs nothing extra and is bound directly,
+but Apple has deprecated it. Both run the same program, `raster.cl` and `raster.comp`, which have
+to be changed together. The Vulkan one is embedded as SPIR-V (`raster.spv`, checked in) so nothing
+needs a shader compiler to build; after editing `raster.comp` rebuild it with
+`glslc -O --target-env=vulkan1.1 Rendering/Gpu/raster.comp -o Rendering/Gpu/raster.spv`
+(`brew install shaderc`). Vulkan buffers are host-visible and mapped, which costs nothing on
+unified memory (Apple, integrated GPUs) and is slower than staging on a discrete card.
+
+How it keeps the properties the software rasterizer was built around:
+
+- **Draw order.** Drawing a triangle only records it. At read-back the triangles are binned into
+  16x16 pixel tiles in draw order, and one work item per pixel replays its tile's list, holding
+  colour and depth in registers. Depth `Less`, premultiplied blending and the terrain, statics and
+  mobile passes behave as they do on the CPU, with no atomics.
+- **Edges without double precision.** Apple's GPUs have none, so coverage is decided in integers:
+  vertices are snapped to 1/256 px on the CPU (in double) and the edge functions are exact 64-bit
+  integers. Those are unchanged by shifting vertices and pixel by whole pixels, which is how one
+  slice differs from the next, so every barycentric, and therefore every pixel, is the same
+  whatever canvas it was drawn into. A small render is bit-identical to the centre of a larger one.
+- **Not bit-identical to the CPU.** Sampling at the exact texel boundaries that the 45 degree land
+  mapping lands on is decided by float rounding noise (CentrED's epsilon inset is smaller than the
+  noise), and the CPU and GPU round differently. In a pyramid slice, where tile corners sit on
+  whole pixels, about a third of terrain pixels pick the neighbouring texel; in a centred single
+  image about 1% do. It is not visible, but a pyramid resumed with `--gpu` over slices rendered
+  without it will mix the two, and neither is more right.
+
 ## Browsable whole-map pyramid
 
 `--tiles <dir>` switches from writing one image to slicing the facet into a slippy-map tile
@@ -69,14 +107,17 @@ Two separate knobs control the cost, and they are easy to confuse:
   the canvas and the slice together, leaving the same 0..9 grid at half the resolution.
 
 At full depth one map tile is 44 pixels, which for Felucca is a 247,988 x 249,313 pixel canvas
--- 61 gigapixels. Measured on twelve threads:
+-- 61 gigapixels. The estimates below are `--dry-run`'s for map 1 on twelve threads; the measured
+column is only filled where a full run was done (WebP, 2.0 GB of the 3.5 GB the dry run
+predicts, because the facet is mostly water and open ground, and those slices compress far
+better than the dense terrain the estimate is fitted to):
 
-| `--max-zoom` | px per tile | slices | estimate | measured |
-| --- | --- | --- | --- | --- |
-| 9 (default) | 44 | 78,812 | ~22m, ~38 GB | |
-| 8 | 22 | 20,059 | ~6m, ~10 GB | |
-| 7 | 11 | 5,134 | ~1.7m, ~2.5 GB | **1.6m, 2.1 GB** |
-| 6 | 5.5 | 1,375 | ~42s, ~681 MB | **55s, 680 MB** |
+| `--max-zoom` | px per tile | slices | estimate PNG | estimate WebP | measured WebP |
+| --- | --- | --- | --- | --- | --- |
+| 9 (default) | 44 | 78,812 | ~11m, ~57 GB | ~12m, ~14 GB | |
+| 8 | 22 | 20,059 | ~3m, ~15 GB | ~3.2m, ~3.5 GB | **2.6m, 2.0 GB** |
+| 7 | 11 | 5,134 | ~51s, ~3.7 GB | ~55s, ~0.9 GB | |
+| 6 | 5.5 | 1,375 | ~19s, ~1.0 GB | ~21s, ~245 MB | |
 
 Slice counts exclude the void: they are laid out on the bounding box of the region while the
 facet inside it is a diamond, so for a whole-facet run about half are rejected geometrically and
@@ -131,7 +172,8 @@ searched and changed without re-rendering; see [Points of interest](#points-of-i
 `--start <x,y[,zoom]>` (`Render:Start`) opens the page at a tile instead of fitting the whole
 facet. The zoom is the level the page's readout shows and may be fractional; left out it is one
 level short of the deepest, as for the search box. A position in the URL hash still wins, so
-shared links keep working.
+shared links keep working. The page also accepts `?x=1420&y=1690&zoom=4.5` (`z` works for `zoom`;
+the zoom is optional); the hash, which the page rewrites as you pan, takes precedence over it.
 
 `--template <file>` (`Render:Template`) swaps the built-in page for your own. A template is
 the built-in page's contract and nothing more: `/*__CONFIG__*/null` is replaced with the
@@ -139,6 +181,26 @@ pyramid's settings as a JSON object (grid, zoom levels, extension, marker source
 `/*__POIS__*/null` with the markers embedded from files, or `null`. The first is required, the
 second optional. The built-in page is `index.template.html` in the repository root, compiled into the binary,
 and is the place to start from: edit it to change the default viewer, or copy it for your own.
+
+`--base-url <url>` (`Render:BaseUrl`) is where the pyramid will be served from, e.g.
+`https://maps.example.com/felucca/`. The page carries Open Graph tags so Discord and similar
+can preview a pasted link; crawlers do not run scripts, so they are written into the HTML at
+generation time, and Discord ignores a relative `og:image`, which is why the URL is needed. The
+image is the tile holding `--start` at its zoom level, or `<min-zoom>/0/0` (the whole facet at
+`--min-zoom 0`) without one. It cannot follow a visitor's own position: the `#x,y,zoom` hash never
+reaches a server, so a preview of an arbitrary shared link would need a server rendering on demand. Without it the title and
+description are still there but no image. A custom template opts in with `<!--__OG__-->` in its
+`<head>`.
+
+`index.php` in the repository root is the server-side half of that, for hosts running PHP 8 with
+GD. It is compiled into the binary and written next to `index.html` on every pyramid run; serve
+it as the entry point. Apache serves `index.html` for the bare directory by default, so add
+`DirectoryIndex index.php index.html` to `.htaccess` or links without `index.php` get no preview. For a link with
+`?x=&y=&zoom=` (what the share button copies) it serves `index.html` with Open Graph tags naming
+that position and an `og:image` that is a 800x420 crop of the tiles centred on it, cached in
+`og-cache/`. It reads the pyramid's settings out of `index.html`, so it needs no `--base-url`
+and no configuration; it replaces any tags the renderer wrote. The hash form is not seen by a
+server, so only query links get a position-specific preview.
 
 Tiles that were never written -- ocean, or off the edge of the facet -- simply 404 and show
 through to the page background, which is why pyramid slices default to a transparent background
@@ -362,11 +424,12 @@ that it never covers the marker. It is a property of the type rather than of a s
 only types that ask for it have their rectangles embedded in the page: a region list holds
 thousands, and the rest would be dead weight.
 
-`town-regions.json` in this repository is the eighteen town regions from `regions.json`, picked
-by matching the names of the towns in `pois.json` and the shard's `/api/pois` ignoring case,
-spaces and punctuation (`Neu Arium` is `Neu-Arium`, `Serpent's Hold` is `Serpents Hold`). Nothing
-in the region export says what is a town, so a town that is not on that list -- Papua, Moonglow
-and Skara Brae are regions but not towns there -- has no outline until it is added to the file.
+`town-regions.json` in this repository is the town regions of Schattenwelt from `regions.json`:
+the ones whose `prefix` is `the town of`, which is how the shard's own region list marks a town,
+plus Umrazim, whose region carries no prefix. That is more than the towns in `pois.json` -- Cove,
+Skara Brae, Papua, Moonglow and a few camps and villages have regions but no town stone -- so
+they get an outline and a dot but no town icon. Matching on the names of the stones was the first
+attempt, and it is what missed Cove.
 
 ### Finding a place
 
@@ -597,24 +660,26 @@ they make the files worth reading on their own.
 
 ## Image formats
 
-`--format` picks the encoder: `png`, `jpg`, `gif`, `webp` or `webp-lossless`. A single image
+`--format` picks the encoder: `png`, `jpg`, `webp` or `webp-lossless`. A single image
 otherwise follows its output extension; a pyramid defaults to PNG. `--quality` (1-100, default
-85) applies to the lossy two.
+85) applies to the lossy two. Slices are read and written through SkiaSharp's native codecs,
+including the child slices a pyramid averages from. Skia's WebP encoder is libwebp with no effort
+setting. GIF is not written, because Skia does not encode it.
 
-Measured on one 704x704 slice of detailed terrain, and on a 76-slice pyramid of the same area:
+Measured on a level-8 pyramid (476 slices) of 600x500 tiles of Britain, twelve threads, relative
+to PNG:
 
-| format | size vs PNG | alpha | lossless | notes |
-| --- | --- | --- | --- | --- |
-| `png` | 1.00 | yes | yes | the default; fastest to encode |
-| `webp-lossless` | 0.45 | yes | yes | **byte-identical pixels at under half the size**, ~1.9x the encode time |
-| `webp` | 0.28 | yes | no | smallest with transparency intact |
-| `jpg` | 0.27 | **no** | no | smallest overall, but see below |
-| `gif` | 0.54 | 1-bit | yes | 256 colours; holds up better than expected, because the source art is 16-bit anyway |
+| format | size vs PNG | time vs PNG | alpha | lossless | notes |
+| --- | --- | --- | --- | --- | --- |
+| `png` | 1.00 | 1.00 | yes | yes | the default; zlib makes it the slowest encoder here |
+| `webp-lossless` | 0.58 | 0.86 | yes | yes | **byte-identical pixels at 58% of the size, and faster than PNG** |
+| `webp` | 0.24 | 1.08 | yes | no | smallest with transparency intact |
+| `jpg` | 0.22 | 0.76 | **no** | no | smallest and fastest, but see below |
 
 `webp-lossless` was verified genuinely lossless rather than taken on trust: decoded back, it is
-bit-identical to the PNG across every channel of every pixel. For a whole facet that is the
-difference between 2.5 GB and 1.1 GB for the same image data, so it is worth preferring over the
-PNG default unless something in the chain cannot read WebP.
+bit-identical to the PNG across every channel of every pixel. For a whole facet that is
+about 40% off the disk and no extra time, so it is worth preferring over the PNG default unless
+something in the chain cannot read WebP.
 
 **JPEG has no alpha.** Pyramid slices default to a transparent background, so with `--format jpg`
 they are flattened onto an opaque colour first (`--background` chooses it, black otherwise) and
@@ -624,13 +689,56 @@ discarded texel -- and put a dark fringe around every sprite. The consequence is
 partly covered slices become black squares instead of showing the page through, so JPEG suits a
 pyramid that covers its whole area and PNG or WebP suits a `--region`.
 
-Shallower pyramid levels are averaged from the level below, so a lossy format re-encodes at each
-step. The averaging attenuates the artefacts it inherits, and at quality 85 the top levels hold
-up, but `webp-lossless` avoids the question entirely.
+Shallower pyramid levels are averaged from the pixels of the level below *before* they are
+encoded, so a lossy format does not compound its artefacts level over level. Only a slice left
+by an earlier run is read back from disk, and that one has been through the encoder once.
 
 Changing format on an existing pyramid is detected: a resume only looks for the extension it is
 writing now, so it would re-render everything and leave two formats interleaved. The renderer
 warns and names the format already there.
+
+### Performance baseline
+
+Time and disk estimates (`Rough cost`) are fitted to a matrix of 39 runs: levels 5 to 9, two,
+four and twelve threads, PNG and WebP, plus six, eight and ten threads for levels 7 to 9 in PNG, over one fixed region (`--region 1200,1450,1800,1950`,
+600x500 tiles of Britain) on a 12-core Apple machine, with the shard's `--items` and `--mobiles`
+loaded. Wall seconds, by thread count:
+
+| level | slices (rendered + averaged) | 2 thr | 4 | 6 | 8 | 10 | 12 | PNG | WebP |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 9 | 1,368 + 476 | 70 | 36.5 | 25.5 | 20.0 | 18.5 | 17.9 | 1,389 MB | 331 MB |
+| 8 | 342 + 134 | 18.5 | 10.5 | 7.8 | 6.7 | 6.2 | 6.3 | 359 MB | 86 MB |
+| 7 | 90 + 44 | 7.0 | 4.7 | 3.6 | 3.6 | 3.5 | 3.4 | 107 MB | 23 MB |
+| 6 | 25 + 19 | 3.4 | 2.7 | | | | 2.5 | 34 MB | 6.7 MB |
+| 5 | 9 + 10 | 2.6 | 2.5 | | | | 2.7 | 13 MB | 2.5 MB |
+
+Levels 5 and 6 were run at 2, 4 and 12 threads only; 6, 8 and 10 were added for levels 7 to 9, in
+PNG (WebP times match within a few percent at every cell measured).
+
+What the fit says, and where it is rough:
+
+- **A rendered slice costs about 0.085 CPU-seconds plus 3 microseconds per tile it covers**, so
+  the shallower levels cost more per slice: a level-5 slice covers 65,536 tiles and takes about
+  0.28 s, over three times a native one. An averaged slice, built from memory, costs about
+  0.04 s. Both are measured at 704x704; other `--slice-tiles` values scale the pixel part
+  linearly and are untested.
+- **PNG and WebP take the same time.** The old assumption that WebP encoding dominates a run no
+  longer holds with SkiaSharp; only the file sizes differ.
+- **Threads scale well up to the performance cores, then barely.** The machine is an M2 Max with
+  8 performance and 4 efficiency cores. At level 9 the speedup over two threads is 3.8x on four,
+  5.4x on six and 7.0x on eight (87% per-thread efficiency), but only 7.5x on ten and 7.8x on
+  twelve: each of the last four threads lands on an efficiency core and adds about a fifth of a
+  performance core. Twelve is still the fastest, 10% ahead of eight, but it spends about 17%
+  more CPU and a third more memory to get there. The default of every core is therefore right for
+  wall time; `--threads 8` is the setting for sharing the machine. macOS cannot pin threads, so
+  this is the scheduler's choice and not a controlled split.
+- **Start-up is about a second and a half**, so small runs do not speed up past a few threads: at
+  level 5, twelve threads is slower than four.
+- **Accuracy:** the estimator lands within -18% to +13% of the 27 runs at levels 7 to 9 (mean -1%),
+  with no trend in the thread count, and about 10% over a full-facet WebP run. It runs low on small runs, where
+  start-up and the last few slices dominate. Its knee at two thirds of the logical cores is exact
+  here and a guess on other machines. Disk is within 13% of the matrix but overstates a sparse facet.
+  Peak memory is about 0.4 GB at the smallest runs, 1.2 GB at 1,368 slices and 2.4 GB at 15,000.
 
 ## Configuration
 
@@ -663,6 +771,7 @@ the `SWMAP_Render__` environment variables.
 | `--pois-config <file>` | JSON list of marker sources, each a file or a URL with its own refresh; replaces `--pois` |
 | `--template <file>` | Page to write as `index.html` in place of the built-in viewer |
 | `--start <x,y[,zoom]>` | Where the viewer opens: a tile and optionally a zoom level (default: the whole facet) |
+| `--base-url <url>` | Public URL the tiles are served from; gives the page an absolute `og:image` for chat previews |
 | `--pois-refresh <s>` | Re-fetch a `--pois` URL every `<s>` seconds (min 5; default 0, once on load) |
 | `--min-z`, `--max-z` | Restrict the z range |
 | `-v, --verbose` | Report the view range, tile counts and timings |
@@ -671,9 +780,11 @@ the `SWMAP_Render__` environment variables.
 | `--region <x1,y1,x2,y2>` | Cover only this tile rectangle |
 | `--min-zoom`, `--max-zoom` | Pyramid levels to write (`--max-zoom` sets the depth; `--zoom` sets the detail) |
 | `--threads <n>` | Slices rendered at once (default: every core) |
+| `--gpu` | Rasterize on the GPU instead of on the CPU (see "GPU rendering") |
+| `--gpu-api <api>` | `vulkan`, `opencl` or `auto` (default: Vulkan, then OpenCL) |
 | `--overwrite`, `--dry-run` | Re-render existing slices / report the plan and stop |
 | `-b, --background <c>` | `transparent`, `black`, `white` or `#RRGGBB[AA]` |
-| `-f, --format <fmt>` | `png`, `jpg`, `gif`, `webp`, `webp-lossless` |
+| `-f, --format <fmt>` | `png`, `jpg`, `webp`, `webp-lossless` |
 | `-q, --quality <1-100>` | Encoder quality for `jpg` and `webp` (default 85) |
 
 Note that `--data` is resolved against the current working directory, while `appsettings.json`
@@ -729,10 +840,3 @@ through for tile data and options. Passing it explicitly keeps that code testabl
 - Both legacy (32-bit flag) and extended (64-bit flag, 7.0.9+) `tiledata.mul` layouts are
   supported, detected from the file length; `--tiledata-format` overrides the detection.
 - The background is opaque black, matching the reference's `Clear(Color.Black)`.
-
-## SixLabors Licensing
-
-Image encoding uses [SixLabors.ImageSharp](https://github.com/SixLabors/ImageSharp) under the
-Six Labors Split License. Version 4.x validates a licence key at build time; `sixlabors.lic` in
-the repository root supplies it, wired up through the `SixLaborsLicenseFile` property in
-`swmaprenderer.csproj`.

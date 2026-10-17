@@ -8,27 +8,24 @@
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <RootNamespace>SwMapRenderer</RootNamespace>
         <InvariantGlobalization>true</InvariantGlobalization>
-
-        <!-- ImageSharp 4.x validates its licence at build time. Pointing at the file
-             directly avoids the default recursive **/sixlabors.lic glob, which would
-             otherwise walk the whole client data folder on every build. -->
-        <SixLaborsLicenseFile>$(MSBuildThisFileDirectory)sixlabors.lic</SixLaborsLicenseFile>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="9.0.0"/>
-        <PackageReference Include="Microsoft.Extensions.Configuration.CommandLine" Version="9.0.0"/>
-        <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="9.0.0"/>
-        <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.0"/>
-        <PackageReference Include="SixLabors.ImageSharp" Version="4.1.2"/>
+        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="9.0.0" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.CommandLine" Version="9.0.0" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="9.0.0" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.0" />
+        <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
+        <PackageReference Include="SkiaSharp" Version="4.153.1" />
+        <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.153.1" />
     </ItemGroup>
 
     <ItemGroup>
         <!-- Reference material for a shard operator, not part of this program: it compiles
              against a UO server's own assemblies, so the default **/*.cs glob has to let go
              of it. -->
-        <Compile Remove="Example/**/*.cs"/>
-        <None Include="Example/**/*.cs"/>
+        <Compile Remove="Example/**/*.cs" />
+        <None Include="Example/**/*.cs" />
     </ItemGroup>
 
     <ItemGroup>
@@ -40,7 +37,13 @@
     <ItemGroup>
         <!-- The built-in viewer page. An explicit logical name keeps the lookup independent of
              the root namespace and of where in the tree the file lives. -->
-        <EmbeddedResource Include="index.template.html" LogicalName="index.template.html"/>
+        <EmbeddedResource Include="index.template.html" LogicalName="index.template.html" />
+        <EmbeddedResource Include="index.php" LogicalName="index.php" />
+        <!-- The GPU rasterizer's kernel, compiled by the OpenCL driver at run time. -->
+        <EmbeddedResource Include="Rendering/Gpu/raster.cl" LogicalName="raster.cl" />
+        <!-- The same program for Vulkan, as SPIR-V. It is checked in, built from raster.comp with
+             glslc, so that running or building this needs no shader compiler. -->
+        <EmbeddedResource Include="Rendering/Gpu/raster.spv" LogicalName="raster.spv" />
     </ItemGroup>
 
     <ItemGroup>

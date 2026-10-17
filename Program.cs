@@ -229,7 +229,7 @@ static int RunTiling(MapScene scene, RenderOptions options)
     }
 
     string page = LeafletViewer.Write(grid, plan, options.Map, directory, options.ResolvedFormat,
-        pois, fetched, options.Template, options.ParsedStart);
+        pois, fetched, options.Template, options.ParsedStart, options.BaseUrl);
 
     Console.WriteLine();
     Console.WriteLine($"Rendered {result.Rendered:N0} slices, downsampled {result.Downsampled:N0}, " +
@@ -325,7 +325,7 @@ static RenderOptions LoadOptions(string[] args)
     }
 }
 
-static void Save(Rasterizer rasterizer, RenderOptions options)
+static void Save(IRasterizer rasterizer, RenderOptions options)
 {
     var directory = Path.GetDirectoryName(Path.GetFullPath(options.Output));
     if (!string.IsNullOrEmpty(directory))

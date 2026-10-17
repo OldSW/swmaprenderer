@@ -2,7 +2,7 @@ namespace SwMapRenderer.Assets;
 
 /// <summary>
 /// UO stores every image as 16-bit A1R5G5B5. This expands to straight (non-premultiplied)
-/// 0xAABBGGRR, matching the byte order ImageSharp's Rgba32 expects.
+/// 0xAABBGGRR, matching the RGBA byte order the image encoders expect.
 /// </summary>
 public static class Color16
 {

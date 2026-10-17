@@ -10,5 +10,4 @@ map.png
 # Client data: large, and not ours to redistribute
 vanilla_client/
 /client/
-/sixlabors.lic
 /web/

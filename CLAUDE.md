@@ -26,7 +26,7 @@ it over inferring from code.
 dotnet build                                  # Debug
 dotnet run -- --help                          # full switch list
 dotnet run -- --data ./client --map 1 -x 1440 -y 1688 -o map.png
-dotnet build -c Release                       # see licence note below
+dotnet build -c Release
 ```
 
 There is **no test project and no test framework.** Correctness of the geometry is established
@@ -44,25 +44,6 @@ Rendering anything requires a folder of client `.mul` files, which is **not in t
 (`client/` and `vanilla_client/` are gitignored). Without one, only `--help` and `--dry-run`
 paths are exercisable.
 
-## The Six Labors licence
-
-ImageSharp 4.x validates a licence key at build time, and the validation task uses
-`ContinueOnError="$(Configuration.StartsWith('Debug'))"`. So:
-
-- **Debug builds warn** when no licence is found and succeed anyway.
-- **Release builds fail.**
-
-Locally the key comes from `sixlabors.lic` in the repository root (gitignored). In CI it is
-supplied as an environment variable named exactly `SixLaborsLicenseKey` — MSBuild picks
-environment variables up as properties, and the task reads the property `$(SixLaborsLicenseKey)`.
-The `SIXLABORS_LICENSE_KEY` name that Six Labors' blog mentions does **not** work with 4.1.2. A
-key set this way takes precedence over the file; the targets only look for a file when the key
-property is empty.
-
-`swmaprenderer.csproj` sets `SixLaborsLicenseFile` to an explicit path on purpose: the default
-is a recursive `**/sixlabors.lic` glob, which would walk the enormous `client/` data folder on
-every build. Do not remove it.
-
 ## Architecture
 
 Configuration flows `appsettings.json` (read from the *binary's* directory) → `SWMAP_`-prefixed
@@ -78,7 +59,7 @@ pyramid via `PyramidGenerator`.
 | --- | --- |
 | `Assets/` | `.mul` readers (art, texmaps, hues, tiledata, multis, animations, body tables) over memory-mapped files. `UoFiles` owns them all and stands in for CentrED's `UOFileManager`; `DataFolder` resolves names case-insensitively because shipped clients mix cases. |
 | `Map/` | Terrain and statics layers, the shard item and mobile overlays, `MapDimensions`, and `MapScene`. |
-| `Rendering/` | The port: `IsoProjection`, `LandObject`/`StaticObject`/`MobileObject`, `MapRenderer`, `MapEffect`, `Rasterizer`. |
+| `Rendering/` | The port: `IsoProjection`, `LandObject`/`StaticObject`/`MobileObject`, `MapRenderer`, `MapEffect`, `Rasterizer`. `Rendering/Gpu/` is the optional `--gpu` rasterizer (Vulkan and OpenCL). |
 | `Tiling/` | `SliceGrid` (canvas geometry), `PyramidGenerator`, `PointsOfInterest`, `LeafletViewer`. |
 
 **`MapScene` is the seam that replaces CentrED's `CEDGame.MapManager` singleton.** The ported
@@ -120,6 +101,17 @@ row on the wrong parity steps over every tile in it.
 **The view range is inverted from the projection, not heuristic.** CentrED's
 `(w + h) / zoom / 2.6 + 8 tiles` is sized for an interactive window where a late tile goes
 unnoticed; here anything the range misses is a hard discontinuity between neighbouring slices.
+
+### The GPU rasterizer
+
+`--gpu` swaps `Rasterizer` for a `GpuRasterizerBase` subclass behind `IRasterizer`: triangles are
+only recorded, binned into 16x16 tiles in draw order, and shaded in one dispatch at `CopyTo`.
+`raster.cl` (OpenCL) and `raster.comp` (Vulkan) are the same program in two languages and change
+together; `raster.spv` is built from `raster.comp` with `glslc` and checked in, so rebuild it
+after editing (command in the README). Coverage is exact 64-bit integer edge functions on vertices
+snapped to 1/256 px (Apple GPUs have no double), which is what keeps slices bit-identical across
+canvas sizes; do not move that to float. GPU output is not bit-identical to the CPU's, by design
+(see the README).
 
 ### Colour conventions
 

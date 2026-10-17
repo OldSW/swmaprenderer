@@ -38,19 +38,7 @@ jobs:
 
       - name: Publish
         shell: bash
-        # ImageSharp 4.x validates its licence at build time and errors out in
-        # Release when none is found. sixlabors.lic is gitignored, so the key is
-        # supplied as the MSBuild property $(SixLaborsLicenseKey) — MSBuild picks
-        # environment variables up as properties, which keeps the secret off disk
-        # and out of the process command line. A key set this way takes precedence
-        # over the $(SixLaborsLicenseFile) path the csproj points at locally.
-        env:
-          SixLaborsLicenseKey: ${{ secrets.SIXLABORS_LICENSE }}
         run: |
-          if [ -z "$SixLaborsLicenseKey" ]; then
-            echo "::error::Repository secret SIXLABORS_LICENSE is not set. ImageSharp 4.x fails a Release build without it."
-            exit 1
-          fi
           dotnet publish swmaprenderer.csproj \
             --configuration Release \
             --runtime ${{ matrix.rid }} \

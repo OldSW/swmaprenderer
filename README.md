@@ -740,6 +740,24 @@ What the fit says, and where it is rough:
   here and a guess on other machines. Disk is within 13% of the matrix but overstates a sparse facet.
   Peak memory is about 0.4 GB at the smallest runs, 1.2 GB at 1,368 slices and 2.4 GB at 15,000.
 
+## Docker
+
+The `Dockerfile` builds the linux binary from source (`linux-x64` or `linux-arm64`, following the
+platform being built) and ships it alone on `runtime-deps`. The working directory is `/data`,
+and `--data` and every other path resolve against it, so mount the client folder there:
+
+```bash
+docker build -t swmaprenderer .
+docker run --rm -v "$PWD:/data" swmaprenderer --data client --map 1 -x 1440 -y 1688 -o map.png
+```
+
+A tagged release is also published to `ghcr.io/<owner>/<repo>` (tagged `x.y.z`, `x.y` and `latest`) for
+`linux/amd64` and `linux/arm64`, by `.github/workflows/docker.yml`; it can also be run by hand from the
+Actions tab, which tags the image with the branch and commit and leaves `latest` alone.
+
+Add `--user "$(id -u):$(id -g)"` so the output is not owned by root. The image has no GPU
+drivers, so `--gpu` is not available in it.
+
 ## Configuration
 
 Defaults live in `appsettings.json` under `Render`. A file named with `-c, --config <file>` is

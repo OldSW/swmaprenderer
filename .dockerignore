@@ -1,0 +1,12 @@
+bin/
+obj/
+.git/
+.github/
+.idea/
+client/
+vanilla_client/
+web/
+Example/
+*.png
+*.json
+!appsettings.json

@@ -746,16 +746,24 @@ The `Dockerfile` builds the linux binary from source (`linux-x64` or `linux-arm6
 platform being built) and ships it alone on `runtime-deps`. The working directory is `/data`,
 and `--data` and every other path resolve against it, so mount the client folder there:
 
+The container runs as an idle service and the renderer is started inside it with `docker exec`,
+so the client folder is mounted once and a scheduler can drive it:
+
 ```bash
 docker build -t swmaprenderer .
-docker run --rm -v "$PWD:/data" swmaprenderer --data client --map 1 -x 1440 -y 1688 -o map.png
+docker run -d --name swmaprenderer -v "$PWD:/data" swmaprenderer
+docker exec swmaprenderer swmaprenderer --data client --map 1 -x 1440 -y 1688 -o map.png
 ```
+
+`swmaprenderer` is on the `PATH` in the image. The image has no entrypoint, so a one-off run
+without the service names the binary itself: `docker run --rm -v "$PWD:/data" swmaprenderer
+swmaprenderer --data client ...`.
 
 A tagged release is also published to `ghcr.io/<owner>/<repo>` (tagged `x.y.z`, `x.y` and `latest`) for
 `linux/amd64` and `linux/arm64`, by `.github/workflows/docker.yml`; it can also be run by hand from the
 Actions tab, which tags the image with the branch and commit and leaves `latest` alone.
 
-Add `--user "$(id -u):$(id -g)"` so the output is not owned by root. The image has no GPU
+Add `--user "$(id -u):$(id -g)"` (to `run`, or `exec` for one render) so the output is not owned by root. The image has no GPU
 drivers, so `--gpu` is not available in it.
 
 ## Configuration

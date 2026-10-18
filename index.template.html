@@ -103,7 +103,7 @@
     position: absolute; left: 0; top: 0; max-width: 28px !important; max-height: 28px !important;
     transform: translate(-50%, -50%) scale(var(--icon-scale, 1)); filter: drop-shadow(0 0 2px #000);
   }
-  .poi img + span { left: 16px; }
+  .poi img + span { left: calc(16px * var(--icon-grow, 1)); }
   /* The tooltip and popup panes are outside the marker pane, so Leaflet's img rule does not reach them. */
   .leaflet-tooltip img.tip, .pop img.tip {
     height: 16px; width: auto; max-width: 28px; vertical-align: middle; margin-right: 5px;
@@ -603,8 +603,18 @@ const MAX_MARKERS = 400;
 const ICON_FULL_AT = 2;
 const ICON_MIN = 0.35;
 
+// Past ICON_GROW_AT px per tile (zoom 8 on a 44px/tile pyramid) the icon keeps pace with the
+// map instead of staying a fixed size on screen: a 28px avatar that covered a few tiles there
+// is a speck beside a building once the view is magnified, which reads as the icon shrinking.
+// ICON_MAX stops it ballooning in the overzoom, where the tiles are upscaled and a huge
+// avatar is only in the way.
+const ICON_GROW_AT = 22;
+const ICON_MAX = 2.5;
+
 function iconScale() {
-  return Math.min(1, Math.max(ICON_MIN, Math.sqrt(tilePixels() / ICON_FULL_AT)));
+  const px = tilePixels();
+  if (px > ICON_GROW_AT) return Math.min(ICON_MAX, px / ICON_GROW_AT);
+  return Math.min(1, Math.max(ICON_MIN, Math.sqrt(px / ICON_FULL_AT)));
 }
 
 // The outer boundary of a set of rectangles, as closed rings of [x, y] tile corners: where
@@ -680,7 +690,11 @@ function drawOutlines(view) {
 }
 
 function drawPois() {
-  map.getContainer().style.setProperty('--icon-scale', iconScale().toFixed(3));
+  const scale = iconScale();
+  map.getContainer().style.setProperty('--icon-scale', scale.toFixed(3));
+  // The label sits beside the icon, so it has to move out as the icon grows; it stays put
+  // while the icon shrinks, which is how it has always looked.
+  map.getContainer().style.setProperty('--icon-grow', Math.max(1, scale).toFixed(3));
   poiLayer.clearLayers();
   if (pois.length === 0) return;
 

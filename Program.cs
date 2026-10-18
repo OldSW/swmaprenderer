@@ -216,8 +216,8 @@ static int RunTiling(MapScene scene, RenderOptions options)
     Directory.CreateDirectory(directory);
 
     // --verbose already narrates progress line by line, and a bar redrawn between those lines
-    // would be overwritten by them.
-    var bar = !options.Verbose && ProgressBar.IsSupported ? new ProgressBar() : null;
+    // would be overwritten by them. Without a terminal the bar logs a line per 10% instead.
+    var bar = options.Verbose ? null : new ProgressBar();
     PyramidResult result;
     try
     {

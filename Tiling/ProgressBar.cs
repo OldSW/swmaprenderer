@@ -6,8 +6,10 @@ namespace SwMapRenderer.Tiling;
 /// <summary>
 /// A one-line progress bar redrawn in place on stderr, safe to tick from every worker thread.
 ///
-/// It writes to stderr so that stdout stays the plan and the summary, and draws only when
-/// stderr is a terminal: a carriage-return redraw piped into a log file is one enormous line.
+/// It writes to stderr so that stdout stays the plan and the summary. It redraws in place only
+/// when stderr is a terminal: a carriage-return redraw piped into a log file or a container's
+/// log driver is one enormous line, which some log readers (Portainer's agent among them)
+/// refuse outright. Otherwise it writes one plain line per 10% instead.
 /// Redraws are throttled, because a slice at deep zoom finishes in milliseconds and repainting
 /// the line on each one would cost more than the slice.
 /// </summary>
@@ -22,6 +24,8 @@ public sealed class ProgressBar
     private long _lastDraw;
     private string _phase = string.Empty;
     private int _lastLength;
+    private readonly bool _interactive = !Console.IsErrorRedirected;
+    private int _decile;
 
     /// <summary>The work is only known once the plan is, which is after the bar is built.</summary>
     public void SetTotal(int total) => Volatile.Write(ref _total, Math.Max(total, 1));
@@ -29,8 +33,6 @@ public sealed class ProgressBar
     public int Total => Volatile.Read(ref _total);
 
     public int Done => Volatile.Read(ref _done);
-
-    public static bool IsSupported => !Console.IsErrorRedirected;
 
     /// <summary>Names the stage shown beside the bar, e.g. "level 8".</summary>
     public void SetPhase(string phase)
@@ -46,6 +48,12 @@ public sealed class ProgressBar
     {
         int n = Interlocked.Add(ref _done, count);
 
+        if (!_interactive)
+        {
+            LogMilestone(n);
+            return;
+        }
+
         long now = _clock.ElapsedTicks;
         if (n < Volatile.Read(ref _total) && now - Volatile.Read(ref _lastDraw) < RedrawTicks)
             return;
@@ -60,8 +68,32 @@ public sealed class ProgressBar
     /// <summary>Clears the bar so the next line of output starts at the left edge.</summary>
     public void Finish()
     {
+        if (!_interactive)
+            return;
+
         lock (_gate)
             Console.Error.Write("\r" + new string(' ', _lastLength) + "\r");
+    }
+
+    /// <summary>One line each time another tenth is crossed; a jump past several logs once.</summary>
+    private void LogMilestone(int n)
+    {
+        int total = Volatile.Read(ref _total);
+        int decile = (int)Math.Min(n * 10L / total, 10);
+
+        lock (_gate)
+        {
+            if (decile <= _decile)
+                return;
+            _decile = decile;
+
+            double elapsed = _clock.Elapsed.TotalSeconds;
+            string eta = n >= 20 && n < total
+                ? $", ETA {Span(TimeSpan.FromSeconds(elapsed / n * (total - n)))}" : string.Empty;
+            string phase = _phase.Length > 0 ? $" ({_phase})" : string.Empty;
+            Console.Error.WriteLine($"progress: {decile * 10}%  {n:N0}/{total:N0} slices, " +
+                                    $"{Span(TimeSpan.FromSeconds(elapsed))} elapsed{eta}{phase}");
+        }
     }
 
     private void Draw(int n)

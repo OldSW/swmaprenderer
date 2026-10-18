@@ -97,6 +97,12 @@ public static class ImageOutput
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
         string temp = path + ".part";
+
+        // A run killed mid-write (a container restart, say) leaves its .part behind. Unlinking needs
+        // only the directory's write permission, where re-creating the file in place needs the
+        // file's own, which a leftover owned by another uid does not grant. No-op if absent.
+        File.Delete(temp);
+
         Save(rgba, width, height, temp, format, quality, flattenTo);
         File.Move(temp, path, overwrite: true);
     }

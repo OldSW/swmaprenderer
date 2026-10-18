@@ -103,17 +103,20 @@ public sealed class StaticObject : MapObject
     /// screen, and still lets it through where there is no land to cover it (a nodraw hole
     /// into a cave).
     /// </summary>
-    private bool IsBuried(LandTile land)
+    private bool IsBuried(LandTile land, float highestCorner)
     {
         var files = _scene.Files;
 
         // Water statics are flat floor tiles, so a unit or two under the sand is not "sunk": the
         // sprite's far corner still rises over the land, and the sea shows through the beach in
         // diamonds along the shoreline. Level with the sand is just as bad, and it is where the
-        // shard's shoreline water lies. Over land that is itself water they are left alone.
+        // shard's shoreline water lies, but only while some corner of the land climbs above the
+        // water: a seabed tile at the same z with lower neighbours is the floor under the sea, and
+        // burying the water there paints the seabed through it as brown diamonds. Over land that
+        // is itself water they are left alone.
         bool wet = files.TileData.GetStatic(Tile.Id).Flags.HasFlag(TileFlag.Wet);
         if (wet && land.Id < files.TileData.LandData.Length && !files.TileData.LandData[land.Id].IsWet)
-            return Tile.Z <= land.Z;
+            return Tile.Z < land.Z || (Tile.Z == land.Z && highestCorner > Tile.Z * TILE_Z_SCALE);
 
         return Tile.Z <= land.Z - UndergroundMargin;
     }
@@ -126,16 +129,19 @@ public sealed class StaticObject : MapObject
         if (!_scene.TryGetLandTile(Tile.X, Tile.Y, out var land) || land == null)
             return;
 
-        if (!IsBuried(land))
-            return;
-
         // Under the lowest corner, not the tile's own z: sloping land has neighbours lower than
         // the tile it is keyed to, and a ceiling taken from the tile alone sits above the
         // surface there, so the tips of buried water tiles still pierce the sand as small
         // diamonds.
-        float lowest = float.MaxValue;
+        float lowest = float.MaxValue, highest = float.MinValue;
         foreach (var corner in _scene.CreateLand(land).Vertices)
+        {
             lowest = Math.Min(lowest, corner.Position.Z);
+            highest = Math.Max(highest, corner.Position.Z);
+        }
+
+        if (!IsBuried(land, highest))
+            return;
 
         float ceiling = lowest - 1f;
         for (int i = 0; i < Vertices.Length; i++)

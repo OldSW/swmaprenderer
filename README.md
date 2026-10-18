@@ -855,8 +855,10 @@ through for tile data and options. Passing it explicitly keeps that code testabl
   than 5 units under its own tile's land to just below the lowest corner of that tile (the
   surface can slope away under the tile's own z). Where there is no land to
   draw (a nodraw hole) the static still shows.
-  Water statics are held to a stricter rule -- buried when level with or below *dry* land -- because
-  they are flat floor tiles and otherwise show as diamonds of sea along a beach.
+  Water statics are held to a stricter rule -- buried when below *dry* land, or level with it while
+  a corner of that land climbs above the water -- because they are flat floor tiles and otherwise
+  show as diamonds of sea along a beach. Level with a flat seabed whose neighbours are lower they
+  are left alone, or the seabed shows through the sea as brown diamonds.
 - **Terrain texture validity is tested at the tile's `TexID`, not at its land id.** CentrED
   checks the texmap entry at the land id, which is an unrelated index.
 - **The texture-grouping `DrawBatcher`s are gone.** They exist to cut GPU state changes and have

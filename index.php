@@ -122,6 +122,14 @@ function servePage(string $page, array $cfg, ?array $at): void
     $page = preg_replace('/^\s*<meta (?:property="og:|name="twitter:)[^>]*>\s*$/m', '', $page);
     $page = preg_replace('#<title>.*?</title>#s', '<title>' . $e($title) . "</title>\n$tags", $page, 1);
 
+    // A crawler reads the tags above and runs nothing; a browser runs this and lands on the
+    // static page with the query turned into the hash, which is the form the page itself
+    // writes as the view moves. An HTTP redirect would do the same for browsers but would
+    // send crawlers away from the tags too, and a preview is the reason this script exists.
+    $target = basename(PAGE) . ($at ? '#' . implode(',', $at) : '');
+    $page = str_replace('</head>',
+        '<script>location.replace(' . json_encode($target) . ');</script>' . "\n</head>", $page);
+
     header('Content-Type: text/html; charset=utf-8');
     echo $page;
 }

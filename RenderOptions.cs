@@ -190,6 +190,16 @@ public sealed class RenderOptions
     public string? BaseUrl { get; set; }
 
     /// <summary>
+    /// Where the viewer's "add markers" panel POSTs what a visitor drew, as JSON
+    /// (<c>{ mapId, elements: [...] }</c>). Left out, the panel still draws and can copy the JSON
+    /// but has no submit button. The browser makes the request, so a cross-origin endpoint has
+    /// to allow it with CORS.
+    ///
+    /// Only the viewer uses it; a single image ignores it.
+    /// </summary>
+    public string? SubmitUrl { get; set; }
+
+    /// <summary>
     /// Rasterize on the GPU, through Vulkan or OpenCL, instead of on the CPU. Geometry is still built on the
     /// CPU, so the gain is in the pixel work: large canvases and deep, dense views. If no OpenCL
     /// device can be set up the run says so and carries on in software.
@@ -426,6 +436,11 @@ public sealed class RenderOptions
             !(Uri.TryCreate(BaseUrl, UriKind.Absolute, out var baseUri) &&
               baseUri.Scheme is "http" or "https"))
             errors.Add($"BaseUrl '{BaseUrl}' is not an absolute http(s) URL.");
+
+        if (!string.IsNullOrWhiteSpace(SubmitUrl) &&
+            !(Uri.TryCreate(SubmitUrl, UriKind.RelativeOrAbsolute, out var submitUri) &&
+              (!submitUri.IsAbsoluteUri || submitUri.Scheme is "http" or "https")))
+            errors.Add($"SubmitUrl '{SubmitUrl}' is not an http(s) URL or a relative path.");
 
         if (Start != null && ParseStart(Start) == null)
             errors.Add($"Start '{Start}' is not a tile and an optional zoom level, e.g. 1420,1690 or 1420,1690,4.5.");

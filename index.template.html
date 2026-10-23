@@ -127,6 +127,33 @@
   .pop .cat { color: #9fd0ff; }
   .pop .desc { color: #c8c8d0; white-space: normal; max-width: 18em; }
   .pop .at { color: #7c7c88; }
+
+  /* --- drafting: the "add markers" panel --- */
+  .draft { width: 26em; max-width: calc(100vw - 20px); }
+  .draft button, .draft input[type=text] {
+    font: 12px ui-monospace, Menlo, monospace; color: #e8e8ea;
+    background: #2a2a34; border: 1px solid #44444e; border-radius: 3px; padding: 3px 7px;
+  }
+  .draft button { cursor: pointer; }
+  .draft button.on { background: #3b4a66; border-color: #9fd0ff; }
+  .draft button svg { display: block; width: 16px; height: 16px; }
+  .draft button.icon { padding: 3px 6px; }
+  .draft #dr-toggle { display: flex; align-items: center; gap: 6px; }
+  .draft button:disabled { opacity: 0.45; cursor: default; }
+  .draft .tools, .draft .acts { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
+  .draft .body.off { display: none; }
+  .draft .rows { margin-top: 5px; max-height: 14em; overflow-y: auto; }
+  .draft .item { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 2px 0; }
+  .draft .item .meta { flex: 1 0 100%; display: flex; gap: 4px; padding-bottom: 4px; }
+  .draft .item .meta input[type=text] { flex: 1; min-width: 0; padding: 2px 4px; }
+  .draft .item input[type=color] { flex: none; width: 24px; height: 22px; padding: 0; border: 0; background: none; }
+  .draft .item input[type=text] { flex: 1; min-width: 0; padding: 2px 4px; }
+  .draft .item .kind { flex: none; color: #7c7c88; width: 14px; height: 14px; }
+  .draft .item .kind svg { display: block; width: 14px; height: 14px; }
+  .draft .item .del { flex: none; padding: 1px 6px; }
+  .draft .note { color: #7c7c88; margin-top: 5px; white-space: normal; }
+  .draft .note.bad { color: #ff8a8a; }
+  .map-drafting { cursor: crosshair; }
 </style>
 </head>
 <body>
@@ -430,8 +457,9 @@ function lookOf(category, subtype) {
 
 // The marker's picture: its own icon, else its subtype's, else its type's, else the dot,
 // painted in the most specific colour there is.
-function glyph(category, dot, own, subtype) {
-  const { icon: typeIcon, color } = lookOf(category, subtype);
+function glyph(category, dot, own, subtype, ownColor) {
+  const { icon: typeIcon, color: typeColor } = lookOf(category, subtype);
+  const color = ownColor || typeColor;
   const icon = own || typeIcon;
   if (icon) return `<img src="${esc(icon)}" alt="">`;
   return `<i${dot ? ' class="dot"' : ''}${color ? ` style="--c:${esc(color)}"` : ''}></i>`;
@@ -496,12 +524,41 @@ function readPois(raw, src = {}) {
       x: at.x, y: at.y, z: at.z,
       description: text(r.description) || text(r.desc),
       icon: text(r.icon),
+      // A record's own colour is for its dot; an icon or the type's look still apply otherwise.
+      color: CSS.supports('color', text(r.color)) ? text(r.color) : '',
       area: areaOf(r),
       url: linkOf(text(r.url) || text(r.link)),
       // Only the embedded list is ours; a third party's own "order" means something else.
       order: src.name === 'embedded' && Number.isInteger(r.order) ? r.order : undefined,
       key: fold(name + ' ' + category + ' ' + subtype),
     });
+  }
+
+  // Shapes follow the same rules as markers for facet, category and subtype. The marker stands
+  // at the middle of the shape's bounding box -- what a search lands on -- and the shape itself
+  // is drawn from `shape`.
+  if (raw && typeof raw === 'object' && !Array.isArray(raw) && Array.isArray(raw.shapes)) {
+    for (const e of raw.shapes) {
+      const facet = e && typeof e.mapId === 'number' ? e.mapId : src.mapId ?? null;
+      if (facet !== null && facet !== CFG.mapIndex) continue;
+      const shape = readShape(e);
+      if (!shape || !shape.name) continue;
+
+      const xs = shape.pts.map(p => p.x), ys = shape.pts.map(p => p.y);
+      const x = Math.round((Math.min(...xs) + Math.max(...xs)) / 2);
+      const y = Math.round((Math.min(...ys) + Math.max(...ys)) / 2);
+      const category = text(e.category) || text(src.category) || 'shape';
+      const subtype = text(e.subtype) || shape.kind;
+      out.push({
+        name: shape.name, category, subtype, x, y, z: 0,
+        description: text(e.description) || `${shape.kind}, ${shape.pts.length} point${shape.pts.length === 1 ? '' : 's'}`,
+        icon: '', color: shape.color, area: [],
+        // A point is only its marker; there is nothing more to draw.
+        shape: shape.kind === 'point' ? null : shape,
+        url: '', order: undefined,
+        key: fold(shape.name + ' ' + category + ' ' + subtype),
+      });
+    }
   }
 
   return { pois: out, types };
@@ -689,6 +746,17 @@ function drawOutlines(view) {
   }
 }
 
+// The geometry of shape markers, a pass of its own for the reason drawOutlines is: the marker is
+// capped to the middle of the screen, and the middle of a long road can be off it while the road
+// is not. Only while the legend has the shape's kind on.
+function drawShapes(view) {
+  for (const p of pois) {
+    if (!p.shape || !isOn(p)) continue;
+    p.shapeBounds ??= L.latLngBounds(p.shape.pts.map(q => canvasAt(q.x, q.y)));
+    if (view.intersects(p.shapeBounds)) shapeLayer(p.shape, false).addTo(poiLayer);
+  }
+}
+
 function drawPois() {
   const scale = iconScale();
   map.getContainer().style.setProperty('--icon-scale', scale.toFixed(3));
@@ -702,6 +770,7 @@ function drawPois() {
   const centre = map.getCenter();
 
   drawOutlines(view);
+  drawShapes(view);
 
   const near = [];
   for (const p of pois) {
@@ -737,7 +806,7 @@ function markerFor(p, at, labelled) {
     riseOnHover: true,
     icon: L.divIcon({
       className: 'poi',
-      html: glyph(p.category, false, p.icon, p.subtype) + (labelled && lookOf(p.category, p.subtype).label !== false ? `<span>${esc(p.name)}</span>` : ''),
+      html: glyph(p.category, false, p.icon, p.subtype, p.color) + (labelled && lookOf(p.category, p.subtype).label !== false ? `<span>${esc(p.name)}</span>` : ''),
       iconSize: null,
       iconAnchor: [0, 0],
       popupAnchor: [0, -8],
@@ -984,6 +1053,54 @@ $kinds.addEventListener('change', e => {
 
 map.on('moveend zoomend', drawPois);
 
+// Lines, curves and outlines -- what the add-markers panel submits -- as a source may carry
+// them under `shapes`, next to its `pois`. Each becomes a marker like any other, so it has a
+// legend row, can be searched and switched off, with its geometry drawn while it is on. The
+// reader and the drawing routine are the same whether a shape comes from a source or from
+// ?preview=, because they are the same records: whatever a reviewer saw before approving is
+// what the map shows afterwards. Anything malformed is skipped, since half a shape on screen
+// is more useful than none.
+const SHAPE_COLOR = '#ffd479';
+const MAX_SHAPE_POINTS = 500;
+
+// One element in the submit format, as { kind, name, color, pts }, or null when it is not one.
+function readShape(e) {
+  if (!e || typeof e !== 'object') return null;
+  const isPt = p => p && Number.isFinite(p.x) && Number.isFinite(p.y);
+  const color = /^#[0-9a-f]{6}$/i.test(e.color) ? e.color : SHAPE_COLOR;
+  const name = typeof e.name === 'string' ? e.name.trim() : '';
+  if (e.type === 'point') return isPt(e) ? { kind: 'point', name, color, pts: [{ x: e.x, y: e.y }] } : null;
+  if (!['line', 'curve', 'outline'].includes(e.type) || !Array.isArray(e.points)) return null;
+  const pts = e.points.slice(0, MAX_SHAPE_POINTS).filter(isPt).map(p => ({ x: p.x, y: p.y }));
+  return pts.length >= (e.type === 'line' ? 2 : 3) ? { kind: e.type, name, color, pts } : null;
+}
+
+// The layers for one shape. An outline's fill and its stroke are separate layers: the fill is
+// not clickable, so it never covers a marker or the map under it, and the stroke carries the
+// name. `permanent` keeps the name on show, for a preview of a single shape; a map full of them
+// shows it on hover instead.
+function shapeLayer(d, permanent) {
+  const group = L.layerGroup();
+  const pts = d.pts.map(p => canvasAt(p.x, p.y));
+  let carrier;
+  if (d.kind === 'point') {
+    carrier = L.circleMarker(pts[0], { radius: 7, color: '#14141a', weight: 1, fillColor: d.color, fillOpacity: 1 });
+  } else if (d.kind === 'curve') {
+    carrier = L.polyline(curvePath(d.pts).map(p => canvasAt(p.x, p.y)), { color: d.color, weight: 3 });
+  } else if (d.kind === 'line') {
+    carrier = L.polyline(pts, { color: d.color, weight: 3 });
+  } else {
+    L.polygon(pts, { stroke: false, fillColor: d.color, fillOpacity: 0.15, interactive: false }).addTo(group);
+    carrier = L.polyline([...pts, pts[0]], { color: d.color, weight: 2 });
+  }
+  if (d.name)
+    carrier.bindTooltip(d.name, d.kind === 'point'
+      ? { permanent, direction: 'right', offset: [8, 0] }
+      : { permanent, sticky: !permanent, direction: 'center' });
+  carrier.addTo(group);
+  return group;
+}
+
 // Where the markers come from, in the order their looks are merged: what was embedded
 // first, then each fetched source as the configuration listed them, so a later one
 // overrides an earlier one however the responses happen to arrive.
@@ -1061,6 +1178,338 @@ function loadPois() {
   for (const src of sources) if (src.url) pollSource(src);
 }
 
+// --- drafting: add points, lines, curves and outlines, then submit them --------------------------
+
+// What someone draws here is theirs to review, so it lives in a layer of its own, apart from
+// the shard's markers: it is never searched, filtered or capped, and nothing about it survives
+// a reload. The only way out is the endpoint named by CFG.submitUrl (--submit-url), which gets
+// the lot as one JSON POST. Without one the panel still draws and can copy the JSON instead.
+const draftLayer = L.layerGroup().addTo(map);
+const drafts = [];
+let tool = null;          // 'point', 'outline' or null
+let sketch = null;        // the outline being clicked out, not yet one of `drafts`
+const DRAFT_COLORS = ['#ffd479', '#ff6b6b', '#6bcB77', '#4d96ff', '#c77dff', '#ff9f45'];
+let draftSeq = 0;
+
+// Stroked line icons on a 24px grid; they take the button's text colour.
+const ICON = {
+  add: '<path d="M12 5v14M5 12h14"/>',
+  point: '<path d="M12 21s-6-5.6-6-11a6 6 0 0 1 12 0c0 5.4-6 11-6 11z"/><circle cx="12" cy="10" r="2"/>',
+  line: '<path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.8"/><circle cx="19" cy="5" r="1.8"/>',
+  curve: '<path d="M4 18C8 4 14 4 14 12s4 8 6-6"/>',
+  outline: '<path d="M5 8l9-3 5 6-3 8-10-2z"/>',
+  finish: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  cancel: '<path d="M6 6l12 12M18 6L6 18"/>',
+  submit: '<path d="M21 3L10 14M21 3l-7 18-4-7-7-4z"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/>',
+  clear: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+};
+const icon = name =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ` +
+  `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`;
+const iconButton = (id, name, title) =>
+  `<button type="button" class="icon" id="${id}" title="${title}" aria-label="${title}">${icon(name)}</button>`;
+
+const draftPanel = L.control({ position: 'bottomright' });
+draftPanel.onAdd = function () {
+  const div = L.DomUtil.create('div', 'readout draft');
+  div.innerHTML =
+    `<button type="button" id="dr-toggle" title="Add markers">${icon('add')}add markers</button>` +
+    '<div class="body off" id="dr-body">' +
+      '<div class="tools">' +
+        iconButton('dr-point', 'point', 'Point') +
+        iconButton('dr-line', 'line', 'Line') +
+        iconButton('dr-curve', 'curve', 'Curved line') +
+        iconButton('dr-outline', 'outline', 'Outline') +
+        iconButton('dr-finish', 'finish', 'Finish shape') +
+        iconButton('dr-cancel', 'cancel', 'Cancel shape') +
+      '</div>' +
+      '<div class="note" id="dr-hint"></div>' +
+      '<div class="rows" id="dr-rows"></div>' +
+      '<div class="acts">' +
+        (CFG.submitUrl ? iconButton('dr-submit', 'submit', 'Submit') : '') +
+        iconButton('dr-copy', 'copy', 'Copy JSON') +
+        iconButton('dr-clear', 'clear', 'Clear all') +
+      '</div>' +
+      '<div class="note" id="dr-status"></div>' +
+    '</div>';
+  L.DomEvent.disableClickPropagation(div);
+  L.DomEvent.disableScrollPropagation(div);
+  return div;
+};
+draftPanel.addTo(map);
+
+const $dr = id => document.getElementById(id);
+
+function nextColor() { return DRAFT_COLORS[draftSeq++ % DRAFT_COLORS.length]; }
+
+function say(msg, bad = false) {
+  $dr('dr-status').textContent = msg;
+  $dr('dr-status').classList.toggle('bad', bad);
+}
+
+function setTool(t) {
+  if (sketch && t !== sketch.kind) cancelSketch();
+  tool = tool === t ? null : t;
+  $dr('dr-point').classList.toggle('on', tool === 'point');
+  $dr('dr-line').classList.toggle('on', tool === 'line');
+  $dr('dr-curve').classList.toggle('on', tool === 'curve');
+  $dr('dr-outline').classList.toggle('on', tool === 'outline');
+  map.getContainer().classList.toggle('map-drafting', tool !== null);
+  $dr('dr-hint').textContent =
+    tool === 'point' ? 'Click the map to place a point.' :
+    tool === 'line' ? 'Click the points of the line, then finish (2 or more).' :
+    tool === 'curve' ? 'Click the points the curve passes through, then finish (3 or more).' :
+    tool === 'outline' ? 'Click corners, then finish (3 or more).' : '';
+  updateSketchButtons();
+}
+
+// Two points make a straight line, which is what the line tool is for, so a curve needs a third.
+const minPoints = kind => kind === 'line' ? 2 : 3;
+
+function updateSketchButtons() {
+  $dr('dr-finish').disabled = !sketch || sketch.pts.length < minPoints(sketch.kind);
+  $dr('dr-cancel').disabled = !sketch;
+}
+
+function cancelSketch() {
+  sketch = null;
+  updateSketchButtons();
+  redrawDrafts();
+}
+
+// Tile corners for a line or outline, the tile itself for a point: the coordinates are what the
+// endpoint receives, so they are whole numbers a player could walk to.
+const tileOf = (latlng, corner) => {
+  const t = tileAt(latlng);
+  const f = corner ? Math.round : Math.floor;
+  return { x: f(t.x), y: f(t.y) };
+};
+
+// A smooth path through the clicked points (Catmull-Rom, which passes through every control
+// point, unlike a Bezier fitted to them), sampled finely enough to look round at any zoom the
+// map allows. Done in tile coordinates so it is the same curve whatever the view.
+function curvePath(pts) {
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(i - 1, 0)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(i + 2, pts.length - 1)];
+    for (let k = 0; k < 16; k++) {
+      const t = k / 16, t2 = t * t, t3 = t2 * t;
+      const at = c => 0.5 * (2 * p1[c] + (p2[c] - p0[c]) * t +
+        (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * t2 + (3 * p1[c] - p0[c] - 3 * p2[c] + p3[c]) * t3);
+      out.push({ x: at('x'), y: at('y') });
+    }
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
+function redrawDrafts() {
+  draftLayer.clearLayers();
+  const all = sketch ? [...drafts, sketch] : drafts;
+  for (const d of all) {
+    const pts = d.pts.map(p => canvasAt(p.x, p.y));
+    let layer;
+    if (d.kind === 'point') {
+      layer = L.circleMarker(pts[0], { radius: 7, color: '#14141a', weight: 1, fillColor: d.color, fillOpacity: 1 });
+    } else if (d.kind === 'curve' && d.pts.length >= 3) {
+      // The sketch shows its own clicked points as dots, so the curve is solid even then.
+      layer = L.polyline(curvePath(d.pts).map(p => canvasAt(p.x, p.y)), { color: d.color, weight: 3 });
+      if (d === sketch)
+        for (const at of pts) L.circleMarker(at, { radius: 3, color: d.color, fillOpacity: 1 }).addTo(draftLayer);
+    } else if (d.kind === 'line' && d !== sketch) {
+      layer = L.polyline(pts, { color: d.color, weight: 3 });
+    } else if (d === sketch || pts.length < 3) {
+      layer = L.polyline(pts, { color: d.color, weight: 2, dashArray: '4 4' });
+      for (const at of pts) L.circleMarker(at, { radius: 3, color: d.color, fillOpacity: 1 }).addTo(draftLayer);
+    } else {
+      layer = L.polygon(pts, { color: d.color, weight: 2, fillColor: d.color, fillOpacity: 0.15 });
+    }
+    if (d.name) layer.bindTooltip(d.name, { permanent: d.kind === 'point', direction: 'right', offset: [8, 0] });
+    layer.addTo(draftLayer);
+  }
+}
+
+function listDrafts() {
+  $dr('dr-rows').innerHTML = drafts.map((d, i) =>
+    `<div class="item" data-i="${i}"><span class="kind" title="${d.kind}">${icon(d.kind)}</span>` +
+    `<input type="color" value="${esc(d.color)}" aria-label="colour">` +
+    `<input type="text" value="${esc(d.name)}" placeholder="name" aria-label="name">` +
+    '<button type="button" class="del" aria-label="remove">&times;</button>' +
+    // Optional: staff settle what the legend files it under, these are only the suggestion.
+    '<div class="meta">' +
+      `<input type="text" data-field="category" maxlength="50" value="${esc(d.category || '')}" placeholder="category (optional)" aria-label="category">` +
+      `<input type="text" data-field="subtype" maxlength="50" value="${esc(d.subtype || '')}" placeholder="subtype (optional)" aria-label="subtype">` +
+    '</div></div>').join('');
+}
+
+// Typing rebuilds the layer but never the list, which would take focus from the field.
+$dr('dr-rows').addEventListener('input', e => {
+  const row = e.target.closest('.item');
+  if (!row) return;
+  const d = drafts[Number(row.dataset.i)];
+  if (e.target.type === 'color') d.color = e.target.value;
+  else if (e.target.dataset.field) d[e.target.dataset.field] = e.target.value.trim();
+  else d.name = e.target.value.trim();
+  redrawDrafts();
+});
+
+$dr('dr-rows').addEventListener('click', e => {
+  const row = e.target.closest('.item');
+  if (!row || !e.target.closest('.del')) return;
+  // The row is rebuilt below, which detaches the button from the panel mid-click. Leaflet then
+  // can no longer tell the click came from a control and hands it to the map, where the active
+  // tool turns it into a new element in the place of the one just deleted.
+  L.DomEvent.stop(e);
+  drafts.splice(Number(row.dataset.i), 1);
+  listDrafts();
+  redrawDrafts();
+});
+
+function addDraft(d) {
+  drafts.push(d);
+  listDrafts();
+  redrawDrafts();
+  say('');
+  // A new element's name is the one thing it cannot do without.
+  const names = $dr('dr-rows').querySelectorAll('.item > input[type=text]');
+  names[names.length - 1]?.focus();
+}
+
+map.on('click', e => {
+  if (!tool) return;
+  if (tool === 'point') {
+    addDraft({ kind: 'point', name: '', color: nextColor(), pts: [tileOf(e.latlng, false)] });
+  } else {
+    sketch ??= { kind: tool, name: '', color: nextColor(), pts: [] };
+    sketch.pts.push(tileOf(e.latlng, true));
+    updateSketchButtons();
+    redrawDrafts();
+  }
+});
+
+function finishSketch() {
+  if (!sketch || sketch.pts.length < minPoints(sketch.kind)) return;
+  const d = sketch;
+  sketch = null;
+  updateSketchButtons();
+  addDraft(d);
+}
+
+// The shape the endpoint is sent: coordinates in tiles, one entry per element.
+function draftPayload() {
+  return {
+    mapId: CFG.mapIndex,
+    elements: drafts.map(d => ({
+      type: d.kind, name: d.name, color: d.color,
+      // Left out when empty rather than sent blank: no suggestion is not an empty one.
+      ...(d.category ? { category: d.category } : {}),
+      ...(d.subtype ? { subtype: d.subtype } : {}),
+      ...(d.kind === 'point' ? { x: d.pts[0].x, y: d.pts[0].y } : { points: d.pts }),
+    })),
+  };
+}
+
+function checkDrafts() {
+  if (drafts.length === 0) { say('Nothing to submit yet.', true); return false; }
+  if (drafts.some(d => !d.name)) { say('Every element needs a name.', true); return false; }
+  return true;
+}
+
+async function submitDrafts() {
+  if (!checkDrafts()) return;
+  const btn = $dr('dr-submit');
+  btn.disabled = true;
+  say('Submitting...');
+  try {
+    // A same-site endpoint authenticates with the visitor's session cookie, which Laravel pairs
+    // with a CSRF token it also hands out as a cookie; echoing it back is what proves the
+    // request comes from a page of ours.
+    const xsrf = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]*)/);
+    const response = await fetch(CFG.submitUrl, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(xsrf ? { 'X-XSRF-TOKEN': decodeURIComponent(xsrf[1]) } : {}),
+      },
+      body: JSON.stringify(draftPayload()),
+    });
+    if (response.status === 401) throw new Error('please log in on the site first');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const n = drafts.length;
+    drafts.length = 0;
+    listDrafts();
+    redrawDrafts();
+    say(`Submitted ${n} element${n === 1 ? '' : 's'}.`);
+  } catch (err) {
+    // Kept as drawn: a failed submit must never cost someone their work. A cross-origin
+    // endpoint that sends no CORS header ends up here too.
+    say(`Submit failed (${err.message}). Your drawing is kept.`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$dr('dr-toggle').addEventListener('click', () => {
+  const body = $dr('dr-body');
+  const open = body.classList.toggle('off') === false;
+  if (!open && tool) setTool(tool);
+});
+$dr('dr-point').addEventListener('click', () => setTool('point'));
+$dr('dr-line').addEventListener('click', () => setTool('line'));
+$dr('dr-curve').addEventListener('click', () => setTool('curve'));
+$dr('dr-outline').addEventListener('click', () => setTool('outline'));
+$dr('dr-finish').addEventListener('click', finishSketch);
+$dr('dr-cancel').addEventListener('click', cancelSketch);
+$dr('dr-clear').addEventListener('click', () => {
+  drafts.length = 0;
+  sketch = null;
+  updateSketchButtons();
+  listDrafts();
+  redrawDrafts();
+  say('');
+});
+$dr('dr-copy').addEventListener('click', async () => {
+  if (!checkDrafts()) return;
+  say(await copyText(JSON.stringify(draftPayload(), null, 2)) ? 'JSON copied.' : 'Could not copy.');
+});
+if (CFG.submitUrl) $dr('dr-submit').addEventListener('click', submitDrafts);
+
+// --- previewing a shape given in the URL ----------------------------------------------
+
+// ?preview=<json> draws what a submission would look like, so whoever reviews one does not have
+// to read coordinates. The json is the element format of the submit payload -- one element, a
+// list of them, or { elements: [...] } -- so a link can be made from a stored submission as it
+// is. It is drawn in a layer of its own and is never added to the drafts, so it cannot be
+// submitted by accident. Anything malformed is skipped: a link is typed or generated by hand,
+// and half a shape on screen is more useful than none.
+function parsePreview() {
+  const raw = new URLSearchParams(location.search).get('preview');
+  if (!raw) return [];
+  let data;
+  try { data = JSON.parse(raw); } catch { return []; }
+  const list = Array.isArray(data) ? data : Array.isArray(data?.elements) ? data.elements : [data];
+  return list.map(readShape).filter(Boolean);
+}
+
+const previewShapes = parsePreview();
+
+// Returns the canvas bounds of everything drawn, or null when there was nothing to draw.
+function drawPreview() {
+  if (previewShapes.length === 0) return null;
+  const layer = L.layerGroup().addTo(map);
+  const all = [];
+  for (const d of previewShapes) {
+    all.push(...d.pts.map(p => canvasAt(p.x, p.y)));
+    shapeLayer(d, true).addTo(layer);
+  }
+  return L.latLngBounds(all);
+}
+
+const previewBounds = drawPreview();
+
 // --- shareable position ------------------------------------------------------------
 
 // A position can be given as #x,y[,zoom] or as ?x=..&y=..[&zoom=..]. The hash is what the page
@@ -1096,8 +1545,11 @@ map.on('moveend zoomend', () => {
 
 if (!applyHash()) {
   // The hash wins over a configured start, or a link someone shared would open somewhere
-  // else the moment the page had one.
-  if (CFG.start) {
+  // else the moment the page had one. A preview wins over the start: it is why the link exists.
+  if (previewBounds) {
+    // One point has no extent to fit, and fitBounds would zoom in as far as the map goes.
+    map.fitBounds(previewBounds, { padding: [60, 60], maxZoom: Math.min(VIEW_MAX, CFG.maxZoom - 1) });
+  } else if (CFG.start) {
     map.setView(canvasAt(CFG.start.x, CFG.start.y),
       Math.min(VIEW_MAX, CFG.start.zoom ?? CFG.maxZoom - 1));
   } else {

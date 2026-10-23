@@ -64,6 +64,7 @@ public static class CommandLine
         ["--region"] = "Render:Region",
         ["--start"] = "Render:Start",
         ["--base-url"] = "Render:BaseUrl",
+        ["--submit-url"] = "Render:SubmitUrl",
         ["--threads"] = "Render:Threads",
         ["--gpu"] = "Render:Gpu",
         ["--gpu-api"] = "Render:GpuApi",
@@ -267,6 +268,8 @@ public static class CommandLine
               --start <x,y[,zoom]>
                                   Open the page at this tile and, optionally, zoom level
                                   (default: the whole facet). A position in the URL wins
+              --submit-url <url>  Where the page's "add markers" panel POSTs what a visitor
+                                  drew, as JSON. Without it the panel can only copy the JSON
               --threads <n>       Slices to render at once (default: every core)
               --gpu               Rasterize on the GPU instead of on the CPU; falls back to the
                                   CPU with a warning if no device can be used

@@ -126,7 +126,12 @@ function servePage(string $page, array $cfg, ?array $at): void
     // static page with the query turned into the hash, which is the form the page itself
     // writes as the view moves. An HTTP redirect would do the same for browsers but would
     // send crawlers away from the tags too, and a preview is the reason this script exists.
-    $target = basename(PAGE) . ($at ? '#' . implode(',', $at) : '');
+    // Whatever else the link carried (?preview=...) is the page's business, not ours, and goes
+    // along; the position is the part that becomes the hash, so it is not repeated in the query.
+    $rest = array_diff_key($_GET, array_flip(['x', 'y', 'z', 'zoom', 'img']));
+    $target = basename(PAGE)
+        . ($rest ? '?' . http_build_query($rest, '', '&', PHP_QUERY_RFC3986) : '')
+        . ($at ? '#' . implode(',', $at) : '');
     $page = str_replace('</head>',
         '<script>location.replace(' . json_encode($target) . ');</script>' . "\n</head>", $page);
 

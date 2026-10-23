@@ -175,6 +175,14 @@ level short of the deepest, as for the search box. A position in the URL hash st
 shared links keep working. The page also accepts `?x=1420&y=1690&zoom=4.5` (`z` works for `zoom`;
 the zoom is optional); the hash, which the page rewrites as you pan, takes precedence over it.
 
+`?preview=<json>` draws a shape on the map and fits the view to it, so a submission can be
+checked by eye. The JSON is the element format the add-markers panel submits (see
+`--submit-url`): one element, a list of them, or `{ "elements": [...] }`, e.g.
+`?preview={"type":"outline","name":"Forest","color":"#6bcb77","points":[{"x":1400,"y":1700},{"x":1450,"y":1700},{"x":1450,"y":1750}]}`
+(URL-encode it when generating links). It is drawn in a layer of its own and never added to
+the panel's drawing, so it is not submitted. Elements that are malformed are skipped. A position
+in the hash still wins over the fit, so panning after opening a link behaves as usual.
+
 `--template <file>` (`Render:Template`) swaps the built-in page for your own. A template is
 the built-in page's contract and nothing more: `/*__CONFIG__*/null` is replaced with the
 pyramid's settings as a JSON object (grid, zoom levels, extension, marker sources) and
@@ -191,6 +199,19 @@ image is the tile holding `--start` at its zoom level, or `<min-zoom>/0/0` (the 
 reaches a server, so a preview of an arbitrary shared link would need a server rendering on demand. Without it the title and
 description are still there but no image. A custom template opts in with `<!--__OG__-->` in its
 `<head>`.
+
+`--submit-url <url>` (`Render:SubmitUrl`) switches on the submit button of the viewer's "+ add
+markers" panel in the lower right corner. The panel lets a visitor click out points, lines
+(two points or more), curves (a smooth path through three points or more) and outlines (closed shapes, three corners or more), give each a name and colour, and send them on. They are
+drawn in a layer of their own, never mixed with the shard's markers, and are lost on reload. The
+page POSTs `{ "mapId": 1, "elements": [ { "type": "point", "name", "color", "x", "y" }, { "type":
+"line", "curve" or "outline", "name", "color", "points": [ { "x", "y" } ] } ] }` as `application/json`, with
+coordinates in tiles (line, curve and outline points are tile corners; a curve is the points you clicked, and the
+curve is a Catmull-Rom spline through them). Each element may also carry an optional `category` and
+`subtype` (text, up to 50 characters each), which the panel offers as two fields under the name: a suggestion
+for where the shard files it in the legend, left out of the JSON when empty. A failed submit keeps the drawing. The
+browser makes the request, so an endpoint on another origin has to answer with CORS headers. Without
+`--submit-url` the panel still draws and offers "copy json" instead.
 
 `index.php` in the repository root is the server-side half of that, for hosts running PHP 8 with
 GD. It is compiled into the binary and written next to `index.html` on every pyramid run; serve
@@ -430,6 +451,32 @@ plus Umrazim, whose region carries no prefix. That is more than the towns in `po
 Skara Brae, Papua, Moonglow and a few camps and villages have regions but no town stone -- so
 they get an outline and a dot but no town icon. Matching on the names of the stones was the first
 attempt, and it is what missed Cove.
+
+#### Lines, curves and outlines
+
+A fetched source may carry `shapes` next to its `pois` -- the elements the add-markers panel
+submits, in the same format:
+
+```json
+{ "pois": [ ... ],
+  "shapes": [ { "type": "outline", "name": "Forest", "color": "#6bcb77", "mapId": 1,
+                "points": [ { "x": 1400, "y": 1700 }, { "x": 1450, "y": 1700 }, { "x": 1450, "y": 1750 } ] } ] }
+```
+
+`type` is `line` (two points or more), `curve` (three or more, a Catmull-Rom spline through
+them, as in the panel) or `outline` (three or more, closed and filled faintly); a `point` is
+just a marker. `color` is `#rrggbb`, gold when missing or anything else. A shape is a marker
+like the others: it needs a `name`, it takes `category` and `subtype` (`shape` and its `type`
+when absent), it sits at the middle of its bounding box for the search to land on, and it has
+its row in the legend. Its geometry is drawn while that row is on, and its name shows on hover.
+The fill of an outline is not clickable, so it never covers a marker; the stroke is what is
+hovered. As for markers, a shape that names another facet with `mapId` is dropped, and one that
+names none takes the source's `mapId`. They refresh with the source, and a malformed one is
+skipped rather than failing the rest. A record in `pois` may also have a `color`, which paints
+its dot when it has no icon.
+
+Only a `url` source can carry them: a `file` source is read and embedded by the tool, which
+keeps the `pois` of it. `?preview=` draws a shape the same way.
 
 ### Finding a place
 
@@ -798,6 +845,7 @@ the `SWMAP_Render__` environment variables.
 | `--template <file>` | Page to write as `index.html` in place of the built-in viewer |
 | `--start <x,y[,zoom]>` | Where the viewer opens: a tile and optionally a zoom level (default: the whole facet) |
 | `--base-url <url>` | Public URL the tiles are served from; gives the page an absolute `og:image` for chat previews |
+| `--submit-url <url>` | Endpoint the viewer's "add markers" panel POSTs drawn points, lines, curves and outlines to (JSON) |
 | `--pois-refresh <s>` | Re-fetch a `--pois` URL every `<s>` seconds (min 5; default 0, once on load) |
 | `--min-z`, `--max-z` | Restrict the z range |
 | `-v, --verbose` | Report the view range, tile counts and timings |

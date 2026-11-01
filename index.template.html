@@ -548,7 +548,7 @@ function readPois(raw, src = {}) {
       const x = Math.round((Math.min(...xs) + Math.max(...xs)) / 2);
       const y = Math.round((Math.min(...ys) + Math.max(...ys)) / 2);
       const category = text(e.category) || text(src.category) || 'shape';
-      const subtype = text(e.subtype) || shape.kind;
+      const subtype = text(e.subtype);
       out.push({
         name: shape.name, category, subtype, x, y, z: 0,
         description: text(e.description) || `${shape.kind}, ${shape.pts.length} point${shape.pts.length === 1 ? '' : 's'}`,

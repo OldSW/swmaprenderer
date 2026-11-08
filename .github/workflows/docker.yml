@@ -38,8 +38,8 @@ jobs:
         env:
           REPOSITORY: ${{ github.repository }}
 
-      # A v0.3.0 tag gives 0.3.0, 0.3 and latest. A manual run is not a release, so it gets
-      # the branch name and the commit instead and leaves latest alone.
+      # A v0.3.0 tag gives 0.3.0, 0.3 and latest. A manual run gets the branch name and the
+      # commit as well, and latest too, so that it is what `latest` pulls.
       - id: meta
         uses: docker/metadata-action@v6
         with:
@@ -47,7 +47,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
             type=ref,event=branch
             type=sha
 

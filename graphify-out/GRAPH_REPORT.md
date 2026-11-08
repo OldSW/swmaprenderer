@@ -1,26 +1,33 @@
-# Graph Report - swmaprenderer  (2026-11-05)
+# Graph Report - swmaprenderer  (2026-11-08)
 
 ## Corpus Check
-- Large corpus: 83 files · ~5,976,691 words. Semantic extraction will be expensive (many Claude tokens). Consider running on a subfolder.
+- 71 files · ~5,977,866 words
+- Verdict: corpus is large enough that graph structure adds value.
+- Unclassified: 6 file(s) not represented in the graph (top: (none) 4, .comp 1, .spv 1)
 
 ## Summary
-- 1075 nodes · 1990 edges · 60 communities (47 shown, 13 thin omitted)
+- 1087 nodes · 1995 edges · 63 communities (51 shown, 12 thin omitted)
 - Extraction: 93% EXTRACTED · 7% INFERRED · 0% AMBIGUOUS · INFERRED: 146 edges (avg confidence: 0.84)
 - Token cost: 0 input · 0 output
 
+## Graph Freshness
+- Built from commit: `77b90855`
+- Run `git rev-parse HEAD` and compare to check if the graph is stale.
+- Run `graphify update .` after code changes (no API cost).
+
 ## Community Hubs (Navigation)
-- Core Types and Cascade
-- Animation File Reader
-- Hues File Reader
+- PyramidGenerator
+- AnimationFile
+- Vector4
 - Vulkan Wrapper Types
 - RenderOptions Config
 - Paperdoll Layers
-- Architecture Docs
+- Seamless slices (exact view range, canvas-independent geometry)
 - Build Workflow
 - JSON Node Handling
 - OpenCL Interop
 - Point and Rect Records
-- Leaflet Viewer Page
+- Points of interest (--pois, DOM overlay)
 - Tile Flags and Tiledata
 - Docker Workflow
 - Animation Lookup
@@ -28,28 +35,26 @@
 - Body Tables
 - TileData File
 - Multi File
-- MapScene Visibility
-- Map File and Block Cache
+- MapScene
+- IndexedMulFile
 - Statics and Item Overlay
-- Tiling Namespace Usings
-- GPU Rasterizer Files
+- IDisposable
+- SwMapRenderer.Assets
 - IsoProjection
 - UoFiles Container
-- Rendering Files
-- MapRenderer Draw Path
+- Sprite
 - Image Output Formats
-- Land and Static Objects
-- CommandLine Parsing
-- Map and Assets Files
+- CLAUDE.md project guidance
+- CommandLine
+- Leaflet viewer (index.html)
 - DataFolder and Dimensions
 - NuGet Dependencies
 - PHP Tile Server
 - Static Tile Data
-- Constants and Entry
-- TileRhombus
-- Animation Types
-- Projection Depth and Transform
-- Hue Modes
+- Browsable whole-map tile pyramid (--tiles)
+- BodyTables
+- readShape / shapeLayer / curvePath
+- RenderOptions.Validate
 - Overlay Records
 - Level 5 Comparison A
 - Level 5 Comparison B
@@ -60,63 +65,65 @@
 - Diamond Artifacts Screenshot
 - Discord Preview
 - Town Screenshot
-- Skia Output
+- Color16
 - Zoom 9 Screenshot
-- Render Techniques
+- Source layout (Assets, Map, Rendering, Tiling, Example)
 - Stone Tile Sprite A
 - Stone Tile Sprite B
 - Rhombus Parity
 - Unsupported Formats
+- BodyTables.cs
+- GPU rendering (--gpu, Vulkan/OpenCL)
 
 ## God Nodes (most connected - your core abstractions)
-1. `RenderOptions` - 66 edges
+1. `RenderOptions` - 67 edges
 2. `TileFlag` - 36 edges
 3. `VulkanDevice` - 36 edges
 4. `Layer` - 34 edges
 5. `PointsOfInterest` - 31 edges
 6. `PoiRecord` - 31 edges
 7. `UoFiles` - 28 edges
-8. `SwMapRenderer.Assets` - 27 edges
-9. `SliceGrid` - 27 edges
-10. `PyramidGenerator` - 25 edges
+8. `SliceGrid` - 25 edges
+9. `PyramidGenerator` - 25 edges
+10. `SwMapRenderer.Assets` - 25 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `SliceGrid` --references--> `MapDimensions`  [EXTRACTED]
+  Tiling/SliceGrid.cs → Map/MapDimensions.cs
 - `Builder` --references--> `AnimationFile`  [EXTRACTED]
   Map/MobileOverlay.cs → Assets/AnimationFile.cs
-- `Builder` --references--> `BodyTables`  [EXTRACTED]
-  Map/MobileOverlay.cs → Assets/BodyTables.cs
 - `MapFile` --references--> `DataFile`  [EXTRACTED]
   Map/MapFile.cs → Assets/DataFile.cs
 - `StaticsFile` --references--> `IndexedMulFile`  [EXTRACTED]
   Map/StaticsFile.cs → Assets/MulIndex.cs
-- `MapObject` --references--> `Sprite`  [EXTRACTED]
-  Rendering/MapObject.cs → Assets/Sprite.cs
+- `GpuRasterizerBase` --references--> `Sprite`  [EXTRACTED]
+  Rendering/Gpu/GpuRasterizerBase.cs → Assets/Sprite.cs
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **Invariants keeping independently rendered slices seamless** — claude_precision_invariants, readme_closed_form_camera, readme_land_corners_from_index, claude_rasterizer_edge_double, claude_slicegrid_integer_origin, claude_view_range_inverted [EXTRACTED 0.95]
-- **POI source to map marker pipeline** — index_template_pollsource, index_template_readpois, index_template_listkinds, index_template_drawpois, index_template_search [EXTRACTED 0.95]
 - **Shard data overlays fed from server export** — readme_shard_items, readme_mobiles, readme_customizable_houses, example_exportitemsmobilescommand [EXTRACTED 0.90]
+- **POI source to map marker pipeline** — index_template_pollsource, index_template_readpois, index_template_listkinds, index_template_drawpois, index_template_search [EXTRACTED 0.95]
+- **Invariants keeping independently rendered slices seamless** — claude_precision_invariants, readme_closed_form_camera, readme_land_corners_from_index, claude_rasterizer_edge_double, claude_slicegrid_integer_origin, claude_view_range_inverted [EXTRACTED 0.95]
 - **Old, new and diff panels of the level 5 comparison** — tmp_cmp_level5_058ef90_vs_new_5_10_11_old_render_panel, tmp_cmp_level5_058ef90_vs_new_5_10_11_new_render_panel, tmp_cmp_level5_058ef90_vs_new_5_10_11_diff_panel [EXTRACTED 1.00]
 - **Old / new / diff comparison triptych** — tmp_cmp_level5_058ef90_vs_new_5_12_17_old_render_panel, tmp_cmp_level5_058ef90_vs_new_5_12_17_new_render_panel, tmp_cmp_level5_058ef90_vs_new_5_12_17_diff_panel [EXTRACTED 1.00]
 - **Before/after/diff render comparison** — tmp_cmp_level5_head_vs_new_5_10_11_head_panel, tmp_cmp_level5_head_vs_new_5_10_11_new_panel, tmp_cmp_level5_head_vs_new_5_10_11_diff_panel [EXTRACTED 1.00]
 - **Before, after and diff panels of one comparison** — tmp_cmp_level5_head_vs_new_5_12_7_head_render, tmp_cmp_level5_head_vs_new_5_12_7_new_render, tmp_cmp_level5_head_vs_new_5_12_7_diff_panel [EXTRACTED 1.00]
 
-## Communities (60 total, 13 thin omitted)
+## Communities (63 total, 12 thin omitted)
 
-### Community 0 - "Core Types and Cascade"
-Cohesion: 0.05
-Nodes (25): LeafletViewer, ProgressBar, Done, Total, Cascade, Child, Node, PyramidGenerator (+17 more)
-
-### Community 1 - "Animation File Reader"
-Cohesion: 0.05
-Nodes (24): AnimationFile, BaseEntryCount, AnimationFrame, CenterX, CenterY, IsEmpty, Sprite, AnimationFrameSize (+16 more)
-
-### Community 2 - "Hues File Reader"
+### Community 0 - "PyramidGenerator"
 Cohesion: 0.06
-Nodes (24): HuesFile, HueCount, Sprite, IsEmpty, GpuRasterizerBase, Height, TilesX, TilesY (+16 more)
+Nodes (24): SkiaOutput, ProgressBar, Done, Total, Cascade, Child, Node, PyramidGenerator (+16 more)
+
+### Community 1 - "AnimationFile"
+Cohesion: 0.15
+Nodes (11): AnimationFile, BaseEntryCount, AnimationFrame, CenterX, CenterY, IsEmpty, Sprite, AnimationFrameSize (+3 more)
+
+### Community 2 - "Vector4"
+Cohesion: 0.06
+Nodes (31): HuesFile, HueCount, Frame, BinList, BinStart, Clear, Height, HueCount (+23 more)
 
 ### Community 3 - "Vulkan Wrapper Types"
 Cohesion: 0.07
@@ -127,20 +134,20 @@ Cohesion: 0.04
 Nodes (51): RenderOptions, Background, BackgroundColor, BaseUrl, CachedBlocks, DataPath, DefaultBackground, DryRun (+43 more)
 
 ### Community 5 - "Paperdoll Layers"
-Cohesion: 0.06
-Nodes (38): Layer, Arms, Backpack, Beard, Bracelet, Cloak, Earrings, Face (+30 more)
+Cohesion: 0.09
+Nodes (27): Layer, Arms, Backpack, Beard, Bracelet, Cloak, Earrings, Face (+19 more)
 
-### Community 6 - "Architecture Docs"
-Cohesion: 0.06
-Nodes (27): Architecture layers (Assets, Map, Rendering, Tiling), Configuration flow and CommandLine.Normalize, Draw order: terrain, statics, mobiles (depth-coupled), GPU rasterizer (GpuRasterizerBase, IRasterizer), MapScene (replaces CEDGame.MapManager singleton), CLAUDE.md project guidance, Shard data merged into StaticsFile, SliceGrid whole-pixel origin (+19 more)
+### Community 6 - "Seamless slices (exact view range, canvas-independent geometry)"
+Cohesion: 0.21
+Nodes (5): SliceGrid whole-pixel origin, Verification by render comparison (no tests), canvasAt / tileAt projection helpers, Rotate-to-north control (leaflet-rotate), Divergences from the reference
 
 ### Community 7 - "Build Workflow"
 Cohesion: 0.05
 Nodes (40): name, runs-on, steps, strategy, env, DOTNET_CLI_TELEMETRY_OPTOUT, DOTNET_NOLOGO, DOTNET_SKIP_FIRST_TIME_EXPERIENCE (+32 more)
 
 ### Community 8 - "JSON Node Handling"
-Cohesion: 0.10
-Nodes (13): Poi, PointsOfInterest, Items, Stats, Types, PoiStats, PoiType, PoiSource (+5 more)
+Cohesion: 0.07
+Nodes (15): SwMapRenderer.Tiling, LeafletViewer, Poi, PointsOfInterest, Items, Stats, Types, PoiStats (+7 more)
 
 ### Community 9 - "OpenCL Interop"
 Cohesion: 0.12
@@ -150,9 +157,9 @@ Nodes (7): OpenCl, OpenClDevice, Context, Device, Name, Program, OpenClRasterize
 Cohesion: 0.06
 Nodes (29): PointRecord, X, Y, Z, PoiRecord, Category, Coords, Desc (+21 more)
 
-### Community 11 - "Leaflet Viewer Page"
-Cohesion: 0.08
-Nodes (34): Premultiplied alpha colour conventions, boundaryOf (merge rectangles into rings), __CONFIG__ / __POIS__ / __OG__ placeholders, Custom Leaflet CRS (canvas pixels), Add-markers draft panel and submitDrafts, drawOutlines / drawShapes, drawPois / markerFor, Icon scaling with zoom (iconScale) (+26 more)
+### Community 11 - "Points of interest (--pois, DOM overlay)"
+Cohesion: 0.20
+Nodes (14): boundaryOf (merge rectangles into rings), drawOutlines / drawShapes, drawPois / markerFor, Icon scaling with zoom (iconScale), linkOf / esc sanitizing of API data, listKinds legend with subtypes, pollSource / fetchSource / rebuild, readPois / readLook / remap (+6 more)
 
 ### Community 12 - "Tile Flags and Tiledata"
 Cohesion: 0.06
@@ -163,12 +170,12 @@ Cohesion: 0.06
 Nodes (32): env, REGISTRY, REPOSITORY, runs-on, steps, jobs, image, name (+24 more)
 
 ### Community 14 - "Animation Lookup"
-Cohesion: 0.13
-Nodes (16): AnimationLookup, Found, Builder, EquipmentRecord, MobileOverlay, MaxSpriteHeight, MaxSpriteWidth, Stats (+8 more)
+Cohesion: 0.18
+Nodes (14): Builder, EquipmentRecord, MobileOverlay, MaxSpriteHeight, MaxSpriteWidth, Stats, MobileOverlayStats, MobilePlacement (+6 more)
 
-### Community 16 - "Body Tables"
-Cohesion: 0.24
-Nodes (3): BodyDefEntry, BodyTables, DataFolder
+### Community 15 - "Export Command Example"
+Cohesion: 0.10
+Nodes (6): Shard data merged into StaticsFile, Server.Commands, ExportItemsMobilesCommand, Customizable houses (design tiles), Placements merged into StaticsFile, Shard items (--items overlay)
 
 ### Community 17 - "TileData File"
 Cohesion: 0.15
@@ -176,46 +183,54 @@ Nodes (11): LandTileData, IsImpassable, IsWet, TileDataFile, Format, LandData, S
 
 ### Community 18 - "Multi File"
 Cohesion: 0.21
-Nodes (8): MultiComponent, MultiFile, DesignTileRecord, ItemOverlay, Stats, ItemOverlayStats, Placement, PositionRecord
+Nodes (7): DesignRecord, DesignTileRecord, ItemOverlay, Stats, ItemOverlayStats, Placement, PositionRecord
 
-### Community 19 - "MapScene Visibility"
-Cohesion: 0.21
-Nodes (4): MapScene, Files, Options, MobileObject
+### Community 19 - "MapScene"
+Cohesion: 0.07
+Nodes (13): MapFile, Dimensions, Height, Width, MapScene, Files, Options, LandTile (+5 more)
 
-### Community 20 - "Map File and Block Cache"
-Cohesion: 0.19
-Nodes (7): BlockCache, Count, MaxEntries, MapFile, Dimensions, Height, Width
+### Community 20 - "IndexedMulFile"
+Cohesion: 0.22
+Nodes (6): IndexedMulFile, Count, MulIndexEntry, DataLength, IsValid, TexmapFile
 
 ### Community 21 - "Statics and Item Overlay"
-Cohesion: 0.27
-Nodes (5): DesignRecord, StaticsFile, StaticTile, CellIndex, PriorityZ
+Cohesion: 0.35
+Nodes (4): StaticsFile, StaticTile, CellIndex, PriorityZ
+
+### Community 22 - "IDisposable"
+Cohesion: 0.22
+Nodes (5): DataFile, Length, Path, MultiComponent, MultiFile
+
+### Community 23 - "SwMapRenderer.Assets"
+Cohesion: 0.07
+Nodes (13): SwMapRenderer.Map, SwMapRenderer.Rendering.Gpu, SwMapRenderer.Assets, SwMapRenderer.Rendering, HueMode, Hued, Light, None (+5 more)
 
 ### Community 24 - "IsoProjection"
-Cohesion: 0.21
-Nodes (4): IsoProjection, OriginX, OriginY, Zoom
+Cohesion: 0.08
+Nodes (18): IsoProjection, OriginX, OriginY, Zoom, TileRhombus, AMax, AMin, ApproximateCount (+10 more)
 
 ### Community 25 - "UoFiles Container"
 Cohesion: 0.17
 Nodes (12): UoFiles, Animations, Art, Dimensions, Hues, Items, Map, Mobiles (+4 more)
 
-### Community 27 - "MapRenderer Draw Path"
-Cohesion: 0.24
-Nodes (4): MapRenderer, SceneRenderer, CentredProjection, Output
+### Community 26 - "Sprite"
+Cohesion: 0.18
+Nodes (8): ArtFile, MaxStaticHeight, MaxStaticWidth, Sprite, IsEmpty, SpriteCache, BudgetBytes, Count
 
 ### Community 28 - "Image Output Formats"
-Cohesion: 0.27
+Cohesion: 0.24
 Nodes (5): ImageFormat, SizeFactor, TimeFactor, ImageOutput, Names
 
-### Community 29 - "Land and Static Objects"
-Cohesion: 0.24
-Nodes (3): LandTile, StaticObject, Tile
+### Community 29 - "CLAUDE.md project guidance"
+Cohesion: 0.22
+Nodes (8): Architecture layers (Assets, Map, Rendering, Tiling), CLAUDE.md project guidance, Body tables: mobtypes.txt, body.def, bodyconv.def, equipconv.def, CentrED# MapRenderer / MapEffect.fx (reference implementation), ClassicUO, Mobiles (--mobiles overlay), PaperdollOrder (ClassicUO layer order port), SW Map renderer (CLI)
 
-### Community 30 - "CommandLine Parsing"
-Cohesion: 0.20
-Nodes (3): CommandLine, OptionsException, Errors
+### Community 31 - "Leaflet viewer (index.html)"
+Cohesion: 0.31
+Nodes (9): __CONFIG__ / __POIS__ / __OG__ placeholders, Custom Leaflet CRS (canvas pixels), index.template.html (built-in Leaflet viewer), parsePosition / hash and query position, Share link control (shareUrl -> index.php), index.php (OG tags and og-cache crop), Leaflet viewer (index.html), Open Graph preview (--base-url) (+1 more)
 
 ### Community 32 - "DataFolder and Dimensions"
-Cohesion: 0.25
+Cohesion: 0.33
 Nodes (4): MapDimensions, BlockCount, BlockHeight, BlockWidth
 
 ### Community 33 - "NuGet Dependencies"
@@ -230,17 +245,21 @@ Nodes (5): baseUrl(), crop(), prune(), serveImage(), servePage()
 Cohesion: 0.25
 Nodes (8): StaticTileData, IsAnimated, IsBackground, IsFoliage, IsLight, IsPartialHue, IsSurface, IsTranslucent
 
-### Community 37 - "TileRhombus"
-Cohesion: 0.25
-Nodes (7): TileRhombus, AMax, AMin, ApproximateCount, BMax, BMin, RenderStats
+### Community 37 - "Browsable whole-map tile pyramid (--tiles)"
+Cohesion: 0.40
+Nodes (5): Premultiplied alpha colour conventions, Choosing a depth (--max-zoom vs --zoom), Image formats (png, jpg, webp, webp-lossless), Performance baseline and cost estimator, Browsable whole-map tile pyramid (--tiles)
 
-### Community 38 - "Animation Types"
-Cohesion: 0.29
-Nodes (6): AnimationType, Animal, Equipment, Human, Monster, SeaMonster
+### Community 38 - "BodyTables"
+Cohesion: 0.16
+Nodes (7): AnimationType, Animal, Equipment, Human, Monster, SeaMonster, BodyTables
 
-### Community 41 - "Hue Modes"
-Cohesion: 0.33
-Nodes (6): HueMode, Hued, Light, None, Partial, Rgb
+### Community 39 - "readShape / shapeLayer / curvePath"
+Cohesion: 0.47
+Nodes (6): Add-markers draft panel and submitDrafts, parsePreview / drawPreview, readShape / shapeLayer / curvePath, Lines, curves and outlines (shapes), ?preview= shape preview, --submit-url and add-markers panel
+
+### Community 40 - "RenderOptions.Validate"
+Cohesion: 0.18
+Nodes (3): CommandLine, OptionsException, Errors
 
 ### Community 43 - "Level 5 Comparison A"
 Cohesion: 0.40
@@ -282,9 +301,9 @@ Nodes (4): Ultima Online town isometric screenshot (Blackrocksyndikat), Blackroc
 Cohesion: 0.67
 Nodes (4): Zoom level 9 map screenshot (Die Magierschaft), Die Magierschaft POI marker (purple hexagram icon with label), Stone castle/tower building rendered isometrically, Yellow diagonal line (region/boundary overlay)
 
-### Community 54 - "Render Techniques"
-Cohesion: 0.67
-Nodes (3): Technique, Statics, Terrain
+### Community 54 - "Source layout (Assets, Map, Rendering, Tiling, Example)"
+Cohesion: 0.40
+Nodes (5): Configuration flow and CommandLine.Normalize, Draw order: terrain, statics, mobiles (depth-coupled), MapScene (replaces CEDGame.MapManager singleton), Configuration layering (appsettings, config file, env, CLI), Source layout (Assets, Map, Rendering, Tiling, Example)
 
 ### Community 55 - "Stone Tile Sprite A"
 Cohesion: 0.67
@@ -294,25 +313,29 @@ Nodes (3): s71e.png: isometric diamond stone tile sprite, Grey-teal cobblestone 
 Cohesion: 0.67
 Nodes (3): Isometric cobblestone floor tile sprite (s736), Teal-grey cobblestone texture with dark mortar, Isometric diamond projection of rendered tile
 
+### Community 61 - "GPU rendering (--gpu, Vulkan/OpenCL)"
+Cohesion: 0.67
+Nodes (4): GPU rasterizer (GpuRasterizerBase, IRasterizer), Docker packaging, GPU rendering (--gpu, Vulkan/OpenCL), raster.cl / raster.comp / raster.spv
+
 ## Knowledge Gaps
-- **324 isolated node(s):** `CenterX`, `CenterY`, `IsEmpty`, `BaseEntryCount`, `MaxStaticWidth` (+319 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 451 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **13 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **324 isolated node(s):** `File`, `Url`, `Order`, `Items`, `Stats` (+319 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 456 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **12 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `RenderOptions` connect `RenderOptions Config` to `DataFolder and Dimensions`, `Core Types and Cascade`, `Hues File Reader`, `Option Parsing`, `JSON Node Handling`, `TileData File`, `MapScene Visibility`, `MapRenderer Draw Path`, `Image Output Formats`, `CommandLine Parsing`?**
-  _High betweenness centrality (0.155) - this node is a cross-community bridge._
-- **What connects `CenterX`, `CenterY`, `IsEmpty` to the rest of the system?**
+- **Why does `RenderOptions` connect `RenderOptions Config` to `PyramidGenerator`, `Vector4`, `JSON Node Handling`, `RenderOptions.Validate`, `RenderOptions.ResolvePoiSources`, `Body Tables`, `MapScene`, `IsoProjection`, `CommandLine`?**
+  _High betweenness centrality (0.112) - this node is a cross-community bridge._
+- **What connects `File`, `Url`, `Order` to the rest of the system?**
   _324 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `Core Types and Cascade` be split into smaller, more focused modules?**
-  _Cohesion score 0.053313587560162905 - nodes in this community are weakly interconnected._
-- **Should `Animation File Reader` be split into smaller, more focused modules?**
-  _Cohesion score 0.05179982440737489 - nodes in this community are weakly interconnected._
-- **Should `Hues File Reader` be split into smaller, more focused modules?**
-  _Cohesion score 0.06013986013986014 - nodes in this community are weakly interconnected._
+- **Should `PyramidGenerator` be split into smaller, more focused modules?**
+  _Cohesion score 0.05625 - nodes in this community are weakly interconnected._
+- **Why does `Mobiles (--mobiles overlay)` connect `CLAUDE.md project guidance` to `Export Command Example`?**
+  _High betweenness centrality (0.098) - this node is a cross-community bridge._
+- **Should `AnimationFile` be split into smaller, more focused modules?**
+  _Cohesion score 0.1471861471861472 - nodes in this community are weakly interconnected._
+- **Should `Vector4` be split into smaller, more focused modules?**
+  _Cohesion score 0.05658381808566896 - nodes in this community are weakly interconnected._
 - **Should `Vulkan Wrapper Types` be split into smaller, more focused modules?**
-  _Cohesion score 0.06892230576441102 - nodes in this community are weakly interconnected._
-- **Should `RenderOptions Config` be split into smaller, more focused modules?**
-  _Cohesion score 0.0392156862745098 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06715063520871144 - nodes in this community are weakly interconnected._

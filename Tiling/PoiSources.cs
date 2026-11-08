@@ -17,6 +17,7 @@ public enum PoiSourceKind
 /// The rest says how to read what is there, for the source that is somebody else's API rather
 /// than a list written for this tool: <see cref="Key"/> names the array holding the records,
 /// <see cref="Category"/> is what records with no category of their own are called,
+/// <see cref="Subtype"/> likewise for the subtype, which is how a source becomes a subcategory,
 /// <see cref="MapId"/> is the facet records with none are on, and <see cref="Types"/> gives
 /// looks to categories. <see cref="Fields"/> says where in a record each of its properties is,
 /// for an API whose records are not shaped the way this tool expects.
@@ -24,7 +25,7 @@ public enum PoiSourceKind
 public sealed record PoiSource(string Name, PoiSourceKind Kind, string Location, int RefreshSeconds,
     string? Key = null, string? Category = null, int? MapId = null,
     IReadOnlyDictionary<string, PoiType>? Types = null,
-    IReadOnlyDictionary<string, string>? Fields = null)
+    IReadOnlyDictionary<string, string>? Fields = null, string? Subtype = null)
 {
     /// <summary>
     /// Where the configuration lists this source. The page orders the legend by it, and a file
@@ -236,7 +237,7 @@ public static class PoiSources
 
                 sources.Add(new PoiSource(name ?? location, kind, location, refresh,
                     Text(entry, "key"), Text(entry, "category"), mapId,
-                    PointsOfInterest.ReadTypes(entry), fields));
+                    PointsOfInterest.ReadTypes(entry), fields, Text(entry, "subtype")));
             }
 
             if (errors.Count > 0)
@@ -244,6 +245,69 @@ public static class PoiSources
 
             return sources;
         }
+    }
+
+    /// <summary>
+    /// Which legend rows start ticked, from a top-level <c>preselected</c> block next to
+    /// <c>sources</c>:
+    /// <code>
+    /// "preselected": { "town": true, "vendor": { "alchemist": true, "smith": false } }
+    /// </code>
+    /// <c>true</c> ticks a category with all its subtypes, <c>false</c> leaves it off, and an
+    /// object decides subtype by subtype. Anything not mentioned starts off. Null when the
+    /// block is absent, which is not the same as empty: with no block everything starts on, as
+    /// it always did, while an empty one starts with nothing ticked.
+    /// Values are <c>bool</c> or <c>Dictionary&lt;string, bool&gt;</c>, ready to serialise.
+    /// </summary>
+    /// <exception cref="InvalidDataException">Every problem found, one per line.</exception>
+    public static IReadOnlyDictionary<string, object>? ReadPreselected(string configPath)
+    {
+        using var stream = File.OpenRead(configPath);
+        using var document = JsonDocument.Parse(stream, new JsonDocumentOptions
+        {
+            CommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+        });
+
+        if (document.RootElement.ValueKind != JsonValueKind.Object ||
+            !document.RootElement.TryGetProperty("preselected", out var block))
+            return null;
+
+        if (block.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException($"'{configPath}': \"preselected\" is an object mapping categories to true, false or an object of subtypes.");
+
+        var errors = new List<string>();
+        var result = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var category in block.EnumerateObject())
+        {
+            if (category.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                result[category.Name.Trim()] = category.Value.GetBoolean();
+            }
+            else if (category.Value.ValueKind == JsonValueKind.Object)
+            {
+                var subs = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+                foreach (var sub in category.Value.EnumerateObject())
+                {
+                    if (sub.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                        subs[sub.Name.Trim()] = sub.Value.GetBoolean();
+                    else
+                        errors.Add($"'{configPath}': preselected.{category.Name}.{sub.Name} is true or false.");
+                }
+
+                result[category.Name.Trim()] = subs;
+            }
+            else
+            {
+                errors.Add($"'{configPath}': preselected.{category.Name} is true, false or an object of subtypes.");
+            }
+        }
+
+        if (errors.Count > 0)
+            throw new InvalidDataException(string.Join(Environment.NewLine, errors));
+
+        return result;
     }
 
     private static string? Text(JsonElement element, string property)

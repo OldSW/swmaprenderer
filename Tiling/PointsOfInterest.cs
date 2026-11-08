@@ -133,7 +133,7 @@ public sealed class PointsOfInterest
             kept.Add(new Poi(name, x, y, z,
                 category,
                 First(record.Description, record.Desc),
-                First(record.Icon), source?.Order, First(record.Subtype, record.Subcategory),
+                First(record.Icon), source?.Order, First(record.Subtype, record.Subcategory, source?.Subtype),
                 First(record.Url, record.Link), area));
         }
 

@@ -142,6 +142,10 @@ public sealed class RenderOptions
         return string.IsNullOrWhiteSpace(Pois) ? [] : [Tiling.PoiSources.Single(Pois, PoisRefresh)];
     }
 
+    /// <summary>The legend's preselection from the configuration file, null when it has none.</summary>
+    public IReadOnlyDictionary<string, object>? ResolvePreselected() =>
+        string.IsNullOrWhiteSpace(PoisConfig) ? null : Tiling.PoiSources.ReadPreselected(PoisConfig);
+
     /// <summary>Log per-stage timings and tile counts.</summary>
     public bool Verbose { get; set; }
 

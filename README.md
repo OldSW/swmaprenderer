@@ -344,6 +344,22 @@ read it, because the API cannot be asked to change:
   fractions are rounded to the tile. An unknown name in `fields` is an error, listed with the
   ones that exist.
 
+A source can also give `subtype`, which records with no subtype of their own take, as `category`
+does for the category. That makes a whole source one subcategory of a category that other sources
+share.
+
+The legend's starting state is set by a top-level `preselected` block next to `sources`:
+
+```json
+"preselected": { "town": true, "vendor": { "alchemist": true, "smith": false } }
+```
+
+`true` ticks a category with all its subtypes, `false` leaves it off, and an object decides
+subtype by subtype. Anything not mentioned starts off. With no block at all everything starts
+on, as before; an empty block starts with nothing ticked. A row is only preselected the first
+time the page sees it, so a polled source rebuilding the legend does not undo what a visitor
+ticked.
+
 The shard's status API is read this way: its `players` array has a `name` and a `position`
 each, and its `cities` and counters are none of the map's business. `poi-sources.json` in this
 repository wires it up next to the town stones, polling every 15 seconds, with players in

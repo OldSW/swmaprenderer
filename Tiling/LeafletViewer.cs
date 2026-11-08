@@ -64,7 +64,8 @@ public static class LeafletViewer
     public static string Write(SliceGrid grid, PyramidPlan plan, int mapIndex, string outputDirectory,
         ImageFormat format, PointsOfInterest? embedded = null, IReadOnlyList<PoiSource>? fetched = null,
         string? templatePath = null, (int X, int Y, double? Zoom)? start = null,
-        string? baseUrl = null, string? submitUrl = null)
+        string? baseUrl = null, string? submitUrl = null,
+        IReadOnlyDictionary<string, object>? preselected = null)
     {
         var config = new
         {
@@ -92,10 +93,11 @@ public static class LeafletViewer
             submitUrl = string.IsNullOrWhiteSpace(submitUrl) ? null : submitUrl,
             extension = format.Extension,
             format = format.Name,
+            preselected,
             poiSources = (fetched ?? []).Select(s => new
             {
                 name = s.Name, order = s.Order, url = s.Location, refreshSeconds = s.RefreshSeconds,
-                key = s.Key, category = s.Category, mapId = s.MapId, types = s.Types, fields = s.Fields,
+                key = s.Key, category = s.Category, mapId = s.MapId, types = s.Types, fields = s.Fields, subtype = s.Subtype,
             }),
         };
 

@@ -60,18 +60,26 @@
   .find .kinds input { margin: 0; flex: none; accent-color: #ffd479; }
   .find .kinds .sub { padding-left: 32px; }
   .find .kinds .subs.shut { display: none; }
+  /* The arrow and the gap that stands in for it take the same 13px, so the checkboxes of
+     rows with and without subtypes line up. The margin is zeroed because `.find button`
+     would otherwise add 4px to the arrow alone. */
   .find .kinds .fold {
-    flex: none; width: 13px; padding: 0; border: 0; background: none; cursor: pointer;
+    flex: none; width: 13px; margin: 0; padding: 0; border: 0; background: none; cursor: pointer;
     color: #7c7c88; font: inherit; line-height: 1;
   }
   .find .kinds .fold::before { content: '\25B8'; }
   .find .kinds .fold.open::before { content: '\25BE'; }
   .find .kinds .gap { flex: none; width: 13px; }
+  /* Every category has the slot for its icon or dot, filled or not, so the names line up. */
+  .find .kinds .pic { flex: none; width: 14px; display: flex; justify-content: center; }
   .find .kinds .of {
     flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .find .kinds .n { color: #7c7c88; padding-left: 8px; }
   .find .note { color: #7c7c88; }
+  .find .all { margin-top: 5px; }
+  .find .all a { color: #7c7c88; cursor: pointer; text-decoration: underline; }
+  .find .all.off { display: none; }
   .find ul {
     list-style: none; margin: 5px 0 0; padding: 0;
     max-height: 16em; overflow-y: auto;
@@ -457,11 +465,30 @@ function lookOf(category, subtype) {
 
 // The marker's picture: its own icon, else its subtype's, else its type's, else the dot,
 // painted in the most specific colour there is.
+// An icon that failed to load is swapped for the dot it would have fallen back to, so a
+// marker is never invisible just because its picture is missing. Remembered per URL, so a
+// later marker with the same icon gets the dot straight away instead of asking again.
+const badIcons = new Set();
+document.addEventListener('error', e => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement)) return;
+  // A picture beside a name in a tooltip or popup is only decoration: it just goes.
+  if (img.classList.contains('tip')) return img.remove();
+  if (!img.dataset.icon) return;
+  badIcons.add(img.dataset.icon);
+  const dot = document.createElement('i');
+  if (img.dataset.dot) dot.className = 'dot';
+  if (img.dataset.color) dot.style.setProperty('--c', img.dataset.color);
+  img.replaceWith(dot);
+}, true);
+
 function glyph(category, dot, own, subtype, ownColor) {
   const { icon: typeIcon, color: typeColor } = lookOf(category, subtype);
   const color = ownColor || typeColor;
   const icon = own || typeIcon;
-  if (icon) return `<img src="${esc(icon)}" alt="">`;
+  if (icon && !badIcons.has(icon))
+    return `<img src="${esc(icon)}" alt="" data-icon="${esc(icon)}"` +
+      (dot ? ' data-dot="1"' : '') + (color ? ` data-color="${esc(color)}"` : '') + '>';
   return `<i${dot ? ' class="dot"' : ''}${color ? ` style="--c:${esc(color)}"` : ''}></i>`;
 }
 
@@ -518,7 +545,7 @@ function readPois(raw, src = {}) {
     if (!at) continue;
 
     const category = text(r.category) || text(r.type) || text(src.category);
-    const subtype = text(r.subtype) || text(r.subType) || text(r.subcategory);
+    const subtype = text(r.subtype) || text(r.subType) || text(r.subcategory) || text(src.subtype);
     out.push({
       name, category, subtype,
       x: at.x, y: at.y, z: at.z,
@@ -637,6 +664,19 @@ let off = new Set();
 // Categories whose subtypes are showing. Folded is the default, since a category can have
 // dozens of them; like `off`, it outlives the legend's rebuilds.
 let unfolded = new Set();
+// Legend rows already given their starting state. Only a row seen for the first time is
+// preselected, so that a poll rebuilding the legend does not undo what someone ticked.
+const started = new Set();
+// Null when the configuration has no "preselected" block: everything starts on.
+const PRESELECTED = CFG.preselected
+  ? new Map(Object.entries(CFG.preselected).map(([c, v]) => [fold(c),
+      typeof v === 'object' ? new Map(Object.entries(v).map(([s, on]) => [fold(s), on])) : v]))
+  : null;
+function startsOn(category, subtype) {
+  if (!PRESELECTED) return true;
+  const v = PRESELECTED.get(fold(category || ''));
+  return typeof v === 'object' ? v.get(fold(subtype || '')) === true : v === true;
+}
 const leafKey = (category, subtype) => (category || '') + '\u0000' + (subtype || '');
 const isOn = p => !off.has(leafKey(p.category, p.subtype));
 let pending = null;
@@ -839,6 +879,7 @@ find.onAdd = function () {
       '<input type="text" id="q" placeholder="x, y or name" autocomplete="off" spellcheck="false">' +
       '<button id="go" type="button">go</button>' +
     '</div>' +
+    '<div class="all off" id="all"><a role="button" tabindex="0"></a></div>' +
     '<div class="kinds off" id="kinds"></div>' +
     '<ul id="hits"></ul>';
   L.DomEvent.disableClickPropagation(div);
@@ -850,6 +891,7 @@ find.addTo(map);
 const $q = document.getElementById('q');
 const $hits = document.getElementById('hits');
 const $kinds = document.getElementById('kinds');
+const $all = document.getElementById('all');
 
 /// Two numbers mean a tile; anything else is a name to look up.
 function asTile(value) {
@@ -970,6 +1012,13 @@ function listKinds() {
         a.subtype.localeCompare(b.subtype));
   }
 
+  for (const k of kinds) for (const s of k.subs) {
+    const key = leafKey(k.category, s.subtype);
+    if (started.has(key)) continue;
+    started.add(key);
+    if (!startsOn(k.category, s.subtype)) off.add(key);
+  }
+
   // Data with no kinds in it at all reduces to the single switch this replaced, and
   // calling that one row "uncategorised" would be pedantry.
   const solo = kinds.length === 1 && !kinds[0].category;
@@ -985,7 +1034,7 @@ function listKinds() {
         ? `<button type="button" class="fold${shown ? ' open' : ''}" data-c="${i}" aria-label="show subtypes"></button>`
         : anyRefined ? '<span class="gap"></span>' : '') +
       '<input type="checkbox" data-i="' + i + '">' +
-      (lookOf(k.category).icon || lookOf(k.category).color ? glyph(k.category, true) : '') +
+      `<span class="pic">${lookOf(k.category).icon || lookOf(k.category).color ? glyph(k.category, true) : ''}</span>` +
       `<span class="of">${esc(solo ? 'markers' : k.category || 'uncategorised')}</span>` +
       `<span class="n">${k.count}</span></label>` +
       (refined ? `<div class="subs${shown ? '' : ' shut'}">` + k.subs.map((s, j) =>
@@ -1004,6 +1053,7 @@ function listKinds() {
   }
 
   $kinds.classList.toggle('off', $kinds.innerHTML === '');
+  $all.classList.toggle('off', kinds.length === 0);
   syncKinds();
 }
 
@@ -1017,7 +1067,23 @@ function syncKinds() {
     box.checked = on === mine.length;
     box.indeterminate = on > 0 && on < mine.length;
   }
+  // The link offers whichever way there is left to go: everything, once anything is off.
+  const anyOff = kinds.some(k => k.subs.some(s => off.has(leafKey(k.category, s.subtype))));
+  $all.firstChild.textContent = anyOff ? 'select all' : 'deselect all';
 }
+
+function toggleAll() {
+  const anyOff = kinds.some(k => k.subs.some(s => off.has(leafKey(k.category, s.subtype))));
+  for (const k of kinds) for (const s of k.subs) {
+    const key = leafKey(k.category, s.subtype);
+    if (anyOff) off.delete(key); else off.add(key);
+  }
+  syncKinds();
+  showHits(asTile($q.value) ? [] : search($q.value));
+  drawPois();
+}
+$all.firstChild.addEventListener('click', toggleAll);
+$all.firstChild.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleAll(); } });
 
 // The arrow sits inside the category's label, so the click has to be kept from reaching the
 // checkbox that label belongs to.

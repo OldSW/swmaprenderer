@@ -144,7 +144,7 @@ function servePage(string $page, array $cfg, ?array $at): void
 function serveOverview(array $cfg): void
 {
     // No position: the whole-facet slice, as the renderer's own tags would use.
-    $file = __DIR__ . "/{$cfg['minZoom']}/0/0{$cfg['extension']}";
+    $file = __DIR__ . '/' . ($cfg['tileFolder'] ?? '') . "{$cfg['minZoom']}/0/0{$cfg['extension']}";
     if (!is_file($file)) {
         http_response_code(404);
         return;
@@ -223,8 +223,13 @@ function crop(array $cfg, float $x, float $y, float $zoom): GdImage
     $scale = 2 ** ($zoom - $level);           // output pixels per tile-image pixel
     $toLevel = 2 ** ($level - $cfg['gridMaxZoom']);
 
-    $cx = ($cfg['halfTile'] * ($x - $y) + $cfg['originX']) * $toLevel;
-    $cy = ($cfg['halfTile'] * ($x + $y) + $cfg['originY']) * $toLevel;
+    if (!empty($cfg['northUp'])) {
+        $cx = ($cfg['tileStep'] * $x + $cfg['originX']) * $toLevel;
+        $cy = ($cfg['tileStep'] * $y + $cfg['originY']) * $toLevel;
+    } else {
+        $cx = ($cfg['halfTile'] * ($x - $y) + $cfg['originX']) * $toLevel;
+        $cy = ($cfg['halfTile'] * ($x + $y) + $cfg['originY']) * $toLevel;
+    }
 
     // The window in tile-image pixels that ends up WIDTH x HEIGHT after scaling.
     $w = (int) ceil(WIDTH / $scale);
@@ -239,7 +244,7 @@ function crop(array $cfg, float $x, float $y, float $zoom): GdImage
     $size = $cfg['sliceSize'];
     for ($ty = intdiv($top, $size) - ($top < 0 ? 1 : 0); $ty * $size < $top + $h; $ty++) {
         for ($tx = intdiv($left, $size) - ($left < 0 ? 1 : 0); $tx * $size < $left + $w; $tx++) {
-            $file = __DIR__ . "/$level/$tx/$ty{$cfg['extension']}";
+            $file = __DIR__ . '/' . ($cfg['tileFolder'] ?? '') . "$level/$tx/$ty{$cfg['extension']}";
             // A slice that was never written is ocean, and shows the background.
             $data = $tx >= 0 && $ty >= 0 && is_file($file) ? file_get_contents($file) : false;
             $tile = $data === false ? false : @imagecreatefromstring($data);

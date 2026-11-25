@@ -54,6 +54,7 @@ public static class CommandLine
         ["--statics"] = "Render:ShowStatics",
         ["--nodraw"] = "Render:ShowNoDraw",
         ["--flat"] = "Render:FlatView",
+        ["--north-up"] = "Render:NorthUp",
         ["--prefer-texmaps"] = "Render:PreferTexmaps",
         ["--verbose"] = "Render:Verbose",
         ["-v"] = "Render:Verbose",
@@ -77,7 +78,7 @@ public static class CommandLine
     /// <summary>Switches that may be given without a value, meaning "true".</summary>
     private static readonly HashSet<string> BooleanSwitches =
     [
-        "--land", "--statics", "--nodraw", "--flat", "--prefer-texmaps", "--verbose", "-v",
+        "--land", "--statics", "--nodraw", "--flat", "--north-up", "--prefer-texmaps", "--verbose", "-v",
         "--overwrite", "--dry-run", "--gpu",
     ];
 
@@ -247,6 +248,8 @@ public static class CommandLine
         Tile pyramid (browsable map):
               --tiles <dir>       Write a slippy-map pyramid here instead of one image,
                                   along with an index.html that browses it
+              --north-up          Cut the pyramid north-up, by resampling the isometric
+                                  view; sprites stand at 45 degrees (needs --tiles)
               --slice-tiles <n>   Tiles per slice edge (default 16, giving 704px slices)
               --region <x1,y1,x2,y2>
                                   Cover only this tile rectangle (default: the whole facet)

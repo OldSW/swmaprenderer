@@ -162,6 +162,9 @@
   .draft .note { color: #7c7c88; margin-top: 5px; white-space: normal; }
   .draft .note.bad { color: #ff8a8a; }
   .map-drafting { cursor: crosshair; }
+  /* Leaflet scales the map over 0.25s when zooming. A shorter transition scales it for less
+     time, so each zoom spends less of its frames redrawing the enlarged tiles. */
+  .leaflet-zoom-anim .leaflet-zoom-animated { transition-duration: 0.15s; }
 </style>
 </head>
 <body>
@@ -194,9 +197,17 @@ const CRS = L.extend({}, L.CRS.Simple, {
 const OVERZOOM = 2;
 const VIEW_MAX = CFG.maxZoom + OVERZOOM;
 
-const bounds = L.latLngBounds(
-  L.latLng(0, 0),
-  L.latLng(CFG.canvasHeight, CFG.canvasWidth));
+// Turning the isometric plane into a north-up one scales by 1/√2 (see canvasAt).
+const SQRT_HALF = Math.SQRT1_2;
+
+// The pyramids this page can show, the first being the one it opens on. Each has its own canvas
+// and tile folder; the rest of the pyramid is shared, so only these change when the view does.
+const VIEWS = CFG.views && CFG.views.length ? CFG.views : [CFG];
+let view = VIEWS[0];
+
+function boundsOf(v) {
+  return L.latLngBounds(L.latLng(0, 0), L.latLng(v.canvasHeight, v.canvasWidth));
+}
 
 const map = L.map('map', {
   crs: CRS,
@@ -204,11 +215,13 @@ const map = L.map('map', {
   maxZoom: VIEW_MAX,
   zoomControl: true,
   attributionControl: false,
-  maxBounds: bounds.pad(0.05),
+  maxBounds: boundsOf(view).pad(0.05),
   zoomSnap: 0,
-  // Rotation exists for the one button below. The plugin's own compass control and
-  // touch/shift gestures would let the map be turned to angles nobody asked for.
-  rotate: true,
+  zoomAnimation: true,
+  fadeAnimation: false,
+  // With one pyramid the compass turns the map instead. With two it switches between them, and a
+  // turned map would sit on the wrong canvas. The plugin's own compass and gestures stay off either way.
+  rotate: VIEWS.length === 1,
   bearing: 0,
   rotateControl: false,
   touchRotate: false,
@@ -216,28 +229,34 @@ const map = L.map('map', {
   compassBearing: false,
 });
 
-L.tileLayer('{z}/{x}/{y}' + CFG.extension, {
-  tileSize: CFG.sliceSize,
-  minZoom: CFG.minZoom,
-  maxZoom: VIEW_MAX,
-  minNativeZoom: CFG.minZoom,
-  maxNativeZoom: CFG.maxZoom,
-  bounds: bounds,
-  noWrap: true,
-  errorTileUrl: BLANK,
-  keepBuffer: 2,
-}).addTo(map);
+let tiles = null;
+function showTiles(v) {
+  if (tiles) map.removeLayer(tiles);
+  tiles = L.tileLayer((v.tileFolder || '') + '{z}/{x}/{y}' + CFG.extension, {
+    tileSize: CFG.sliceSize,
+    minZoom: CFG.minZoom,
+    maxZoom: VIEW_MAX,
+    minNativeZoom: CFG.minZoom,
+    maxNativeZoom: CFG.maxZoom,
+    bounds: boundsOf(v),
+    noWrap: true,
+    errorTileUrl: BLANK,
+    keepBuffer: 1,
+    updateWhenZooming: false,
+  }).addTo(map);
+}
+showTiles(view);
 
-// --- rotate to north ---------------------------------------------------------------
+// --- the compass -------------------------------------------------------------------
 
-// The slices are drawn in the client's isometric view, in which north runs towards the
-// upper right. Turning the whole map a quarter-octant anticlockwise puts it straight up.
-// Canvas x and y use the same scale (see canvasAt), so this is a pure rotation with no
-// shear to undo.
+// With two pyramids it switches between them. With one it turns the map to north, as it always
+// did: the isometric plane has north 45 degrees clockwise from straight up, so a quarter-octant
+// anticlockwise turn puts it straight up. Canvas x and y use the same scale (see canvasAt), so
+// that is a pure rotation with no shear to undo.
 const NORTH_UP = 315;
 
-const north = L.control({ position: 'topleft' });
-north.onAdd = function () {
+const compass = L.control({ position: 'topleft' });
+compass.onAdd = function () {
   const div = L.DomUtil.create('div', 'leaflet-bar north');
   const a = L.DomUtil.create('a', '', div);
   a.href = '#';
@@ -250,21 +269,54 @@ north.onAdd = function () {
 
   L.DomEvent.on(a, 'click', e => {
     L.DomEvent.stop(e);
-    map.setBearing(map.getBearing() === 0 ? NORTH_UP : 0);
+    if (VIEWS.length > 1) {
+      switchView(VIEWS.find(v => v !== view) || view);
+    } else {
+      map.setBearing(map.getBearing() === 0 ? NORTH_UP : 0);
+    }
   });
   L.DomEvent.disableClickPropagation(div);
   this.update();
   return div;
 };
-// The arrow points at north wherever north currently is: 45 degrees clockwise from the
-// top of the screen when the map is as rendered, straight up once it has been turned.
-north.update = function () {
-  const b = map.getBearing();
-  this._svg.style.transform = `rotate(${b + 45}deg)`;
-  this._a.title = b === 0 ? 'Rotate map to north' : 'Restore the original view';
+
+// The arrow points at north wherever north is on screen. With two pyramids that depends on the
+// view; with one it depends on how far the map has been turned.
+compass.update = function () {
+  if (VIEWS.length > 1) {
+    this._svg.style.transform = `rotate(${view.northUp ? 0 : 45}deg)`;
+    this._a.title = view.northUp ? 'Show the isometric view' : 'Show the north-up view';
+  } else {
+    const b = map.getBearing();
+    this._svg.style.transform = `rotate(${b + 45}deg)`;
+    this._a.title = b === 0 ? 'Rotate map to north' : 'Restore the original view';
+  }
 };
-north.addTo(map);
-map.on('rotate', () => north.update());
+
+compass.addTo(map);
+map.on('rotate', () => compass.update());
+
+// The map keeps the place and zoom it is showing. Markers hold their outlines in the canvas of the
+// view they were drawn in, so those are dropped and drawn again from the new canvas.
+function switchView(next) {
+  if (next === view)
+    return;
+
+  const centre = tileAt(map.getCenter());
+  const zoom = map.getZoom();
+
+  for (const p of pois) {
+    delete p.rings;
+    delete p.shapeBounds;
+  }
+
+  view = next;
+  map.setMaxBounds(boundsOf(view).pad(0.05));
+  showTiles(view);
+  map.setView(canvasAt(centre.x, centre.y), zoom, { animate: false });
+  compass.update();
+}
+
 
 // --- share the view ----------------------------------------------------------------
 
@@ -339,8 +391,16 @@ share.addTo(map);
 // pixel alone, so anything standing on a hill reads as the tile its base would occupy
 // were the ground flat.
 function tileAt(latlng) {
-  const a = (latlng.lng - CFG.originX) / CFG.halfTile;
-  const b = (latlng.lat - CFG.originY) / CFG.halfTile;
+  let a, b;
+  if (view.northUp) {
+    // Turned back into the isometric plane, where the formula below applies.
+    const dx = latlng.lng - view.originX, dy = latlng.lat - view.originY;
+    a = (dx - dy) * SQRT_HALF / CFG.halfTile;
+    b = (dx + dy) * SQRT_HALF / CFG.halfTile;
+  } else {
+    a = (latlng.lng - view.originX) / CFG.halfTile;
+    b = (latlng.lat - view.originY) / CFG.halfTile;
+  }
   return { x: (a + b) / 2, y: (b - a) / 2 };
 }
 
@@ -350,15 +410,21 @@ function tileAt(latlng) {
 const Z_LIFT = 4 * CFG.halfTile / 22;
 
 function canvasAt(tileX, tileY, z = 0) {
-  return L.latLng(
-    CFG.halfTile * (tileX + tileY) - z * Z_LIFT + CFG.originY,
-    CFG.halfTile * (tileX - tileY) + CFG.originX);
+  const along = CFG.halfTile * (tileX - tileY);
+  const up = CFG.halfTile * (tileX + tileY) - z * Z_LIFT;
+  if (view.northUp) {
+    // The isometric plane turned a quarter-octant anticlockwise, which is what the slices are cut from.
+    return L.latLng(
+      (up - along) * SQRT_HALF + view.originY,
+      (along + up) * SQRT_HALF + view.originX);
+  }
+  return L.latLng(up + view.originY, along + view.originX);
 }
 
 // Map tile per screen pixel at the current zoom, which is what decides whether a label
 // beside a marker is legible or a thousand of them are one smear.
 function tilePixels() {
-  return 2 * CFG.halfTile * Math.pow(2, map.getZoom() - CFG.gridMaxZoom);
+  return view.tileStep * Math.pow(2, map.getZoom() - CFG.gridMaxZoom);
 }
 
 // A standing remark in the corner. Its own control rather than Leaflet's attribution,
@@ -1117,7 +1183,12 @@ $kinds.addEventListener('change', e => {
   drawPois();
 });
 
-map.on('moveend zoomend', drawPois);
+// Markers are rebuilt once the view has settled, not on every step of a zoom. Leaflet fires
+// zoomend before moveend when a zoom finishes, so the flag clears first and moveend draws once.
+let zooming = false;
+map.on('zoomstart', () => { zooming = true; });
+map.on('zoomend', () => { zooming = false; });
+map.on('moveend', () => { if (!zooming) drawPois(); });
 
 // Lines, curves and outlines -- what the add-markers panel submits -- as a source may carry
 // them under `shapes`, next to its `pois`. Each becomes a marker like any other, so it has a

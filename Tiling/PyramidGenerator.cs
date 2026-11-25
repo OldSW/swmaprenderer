@@ -34,8 +34,9 @@ public readonly record struct PyramidPlan(
     /// count; only 704x704 slices were measured.
     /// </summary>
     public double CpuSecondsPerRenderedSlice =>
-        0.085 * Grid.SliceSize * Grid.SliceSize / ReferencePixels
-        + 3.0e-6 * Grid.TilesCoveredPerSlice(MaxZoom);
+        (0.085 * Grid.SliceSize * Grid.SliceSize / ReferencePixels
+         + 3.0e-6 * Grid.TilesCoveredPerSlice(MaxZoom))
+        * Grid.RenderCostFactor;
 
     /// <summary>
     /// CPU-seconds one averaged slice takes: the 2x2 average plus encoding the result. The
@@ -109,10 +110,33 @@ public sealed class PyramidGenerator
     private readonly SliceGrid _grid;
     private readonly RenderOptions _options;
     private readonly string _outputDirectory;
+
+    /// <summary>
+    /// For a north-up run: the isometric grid whose pyramid is written to
+    /// <see cref="_isoDirectory"/> from the same renders. Null otherwise.
+    /// </summary>
+    private readonly SliceGrid? _isoGrid;
+    private readonly string? _isoDirectory;
     private readonly ImageFormat _format;
 
-    public PyramidGenerator(MapScene scene, SliceGrid grid, string outputDirectory)
+    public PyramidGenerator(MapScene scene, SliceGrid grid, string outputDirectory,
+        SliceGrid? isoGrid = null, string? isoDirectory = null)
     {
+        if ((isoGrid == null) != (isoDirectory == null))
+            throw new ArgumentException("An isometric grid and its directory must be given together.");
+        if (grid.NorthUp && isoGrid == null)
+            throw new ArgumentException("A north-up pyramid needs the isometric grid it is cut from.");
+
+        // The north-up pyramid has the same levels as the isometric one. Its slices are drawn at
+        // the deepest level, and each isometric slice is taken at that same level, so the two grids
+        // must agree on it.
+        if (grid.NorthUp && grid.MaxZoom != isoGrid!.MaxZoom)
+            throw new ArgumentException($"The north-up pyramid has levels up to {grid.MaxZoom} but the " +
+                                        $"isometric one has {isoGrid.MaxZoom}; they must match.");
+
+        _isoGrid = isoGrid;
+        _isoDirectory = isoDirectory;
+
         _scene = scene;
         _grid = grid;
         _options = scene.Options;
@@ -145,15 +169,18 @@ public sealed class PyramidGenerator
         return null;
     }
 
-    public PyramidPlan Plan()
+    public PyramidPlan Plan() => PlanFor(_grid);
+
+    /// <summary>The plan for any grid over this facet: the north-up and the isometric one differ.</summary>
+    public PyramidPlan PlanFor(SliceGrid grid)
     {
         var region = ResolveRegion();
         var art = _scene.Files.Art;
 
-        int maxZoom = _options.MaxZoom < 0 ? _grid.MaxZoom : Math.Min(_options.MaxZoom, _grid.MaxZoom);
+        int maxZoom = _options.MaxZoom < 0 ? grid.MaxZoom : Math.Min(_options.MaxZoom, grid.MaxZoom);
         int minZoom = Math.Clamp(_options.MinZoom, 0, maxZoom);
 
-        var native = _grid.SlicesForRegion(
+        var native = grid.SlicesForRegion(
             maxZoom, region.X0, region.Y0, region.X1, region.Y1, art.MaxStaticWidth, art.MaxStaticHeight);
 
         // Count the slices that can actually hold something rather than the whole bounding box.
@@ -163,7 +190,7 @@ public sealed class PyramidGenerator
         {
             for (int x = native.X0; x <= native.X1; x++)
             {
-                if (_grid.SliceTouchesFacet(maxZoom, x, y, _options.MinZ, _options.MaxZ,
+                if (grid.SliceTouchesFacet(maxZoom, x, y, _options.MinZ, _options.MaxZ,
                         art2.MaxStaticWidth, art2.MaxStaticHeight))
                 {
                     nativeCount++;
@@ -180,8 +207,8 @@ public sealed class PyramidGenerator
             total += levelCount;
         }
 
-        return new PyramidPlan(_grid, minZoom, maxZoom, nativeCount, total, native, region,
-            _options.MaxZoom > _grid.MaxZoom);
+        return new PyramidPlan(grid, minZoom, maxZoom, nativeCount, total, native, region,
+            _options.MaxZoom > grid.MaxZoom);
     }
 
     private (int X0, int Y0, int X1, int Y1) ResolveRegion()
@@ -198,6 +225,9 @@ public sealed class PyramidGenerator
 
     public PyramidResult Generate(Action<string>? log = null, ProgressBar? progress = null)
     {
+        if (_grid.NorthUp)
+            return GenerateNorthUp(log, progress);
+
         var stopwatch = Stopwatch.StartNew();
         var plan = Plan();
 
@@ -227,7 +257,7 @@ public sealed class PyramidGenerator
             progress.SetPhase($"levels {plan.MaxZoom}-{plan.MinZoom}");
         }
 
-        var cascade = new Cascade(plan, progress);
+        var cascade = new Cascade(plan, progress, _outputDirectory, _grid.SliceSize);
         var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = threads };
 
         Parallel.ForEach(slices, parallelOptions, slice =>
@@ -256,7 +286,7 @@ public sealed class PyramidGenerator
                     var projection = _grid.ProjectionFor(plan.MaxZoom, slice.X, slice.Y);
                     var stats = renderer.Render(projection);
 
-                    if (stats.LandDrawn == 0 && stats.StaticsDrawn == 0 && stats.MobilesDrawn == 0)
+                    if (!Drew(stats))
                     {
                         // Off the edge of the facet. Leaving the file absent is what makes the
                         // viewer show nothing there rather than a black square.
@@ -294,6 +324,244 @@ public sealed class PyramidGenerator
 
         stopwatch.Stop();
         return new PyramidResult(rendered, downsampled, skippedEmpty, skippedExisting, stopwatch.Elapsed);
+    }
+
+    /// <summary>Whether a render put anything on the canvas at all.</summary>
+    private static bool Drew(RenderStats stats) =>
+        stats.LandDrawn != 0 || stats.StaticsDrawn != 0 || stats.MobilesDrawn != 0;
+
+    /// <summary>
+    /// The north-up run, which writes both pyramids from one set of isometric renders.
+    ///
+    /// Each north-up slice is cut from a window of isometric slices, and each isometric slice is
+    /// used by several north-up slices. The north-up slices are built a row at a time, and each
+    /// isometric slice is rendered when the first row needs it and dropped after the last row that
+    /// does. So every slice is drawn once, and only the strip of slices a row needs is in memory,
+    /// rather than the whole isometric pyramid.
+    /// </summary>
+    private PyramidResult GenerateNorthUp(Action<string>? log, ProgressBar? progress)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var iso = _isoGrid!;
+        var plan = PlanFor(_grid);
+        var isoPlan = PlanFor(iso);
+        int threads = _options.Threads > 0 ? _options.Threads : Environment.ProcessorCount;
+        int size = _grid.SliceSize;
+        int isoZoom = isoPlan.MaxZoom, northZoom = plan.MaxZoom;
+
+        // The north-up slices that can hold something, grouped into rows; the row is the unit a
+        // window is used in.
+        var rows = new List<List<(int X, int Y)>>();
+        for (int y = plan.NativeSlices.Y0; y <= plan.NativeSlices.Y1; y++)
+        {
+            var row = new List<(int X, int Y)>();
+            for (int x = plan.NativeSlices.X0; x <= plan.NativeSlices.X1; x++)
+            {
+                if (_grid.SliceTouchesFacet(northZoom, x, y, _options.MinZ, _options.MaxZ,
+                        _scene.Files.Art.MaxStaticWidth, _scene.Files.Art.MaxStaticHeight))
+                {
+                    row.Add((x, y));
+                }
+            }
+            if (row.Count > 0)
+                rows.Add(row);
+        }
+
+        // The isometric slices that belong to the isometric pyramid, which are written and reported.
+        var isoNative = new HashSet<(int X, int Y)>();
+        for (int y = isoPlan.NativeSlices.Y0; y <= isoPlan.NativeSlices.Y1; y++)
+            for (int x = isoPlan.NativeSlices.X0; x <= isoPlan.NativeSlices.X1; x++)
+                if (iso.SliceTouchesFacet(isoZoom, x, y, _options.MinZ, _options.MaxZ,
+                        _scene.Files.Art.MaxStaticWidth, _scene.Files.Art.MaxStaticHeight))
+                    isoNative.Add((x, y));
+
+        // The last row that needs each isometric slice, so it can be dropped after it.
+        var lastRow = new Dictionary<(int X, int Y), int>();
+        for (int r = 0; r < rows.Count; r++)
+            foreach (var (x, y) in rows[r])
+            {
+                var (x0, y0, x1, y1) = NorthUpSampler.IsoSlicesFor(_grid, iso, northZoom, x, y);
+                for (int iy = y0; iy <= y1; iy++)
+                    for (int ix = x0; ix <= x1; ix++)
+                        lastRow[(ix, iy)] = r;
+            }
+
+        if (progress != null)
+        {
+            progress.SetTotal(rows.Sum(r => r.Count) + isoNative.Count
+                + Enumerable.Range(plan.MinZoom, Math.Max(plan.MaxZoom - plan.MinZoom, 0))
+                    .Sum(z => _grid.SlicesAcross(z) * _grid.SlicesDown(z))
+                + Enumerable.Range(isoPlan.MinZoom, Math.Max(isoPlan.MaxZoom - isoPlan.MinZoom, 0))
+                    .Sum(z => iso.SlicesAcross(z) * iso.SlicesDown(z)));
+            progress.SetPhase($"levels {northZoom}-{plan.MinZoom}");
+        }
+
+        var northCascade = new Cascade(plan, progress, _outputDirectory, size);
+        var isoCascade = new Cascade(isoPlan, progress, _isoDirectory!, iso.SliceSize);
+
+        var isoRenderers = new ConcurrentBag<SceneRenderer>();
+        var northSamplers = new ConcurrentBag<NorthUpSampler>();
+        var cache = new ConcurrentDictionary<(int X, int Y), byte[]?>();
+        var reported = new HashSet<(int X, int Y)>();
+        var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = threads };
+
+        int rendered = 0, skippedEmpty = 0, skippedExisting = 0;
+        int isoWritten = 0, isoExisting = 0;
+
+        // Renders one isometric slice, writes it if it belongs to the isometric pyramid and is not
+        // there yet, and reports it to that pyramid's cascade.
+        void RenderIso(int ix, int iy)
+        {
+            var pixels = RenderIsoSlice(iso, isoZoom, ix, iy, isoRenderers);
+            cache[(ix, iy)] = pixels;
+
+            if (!isoNative.Contains((ix, iy)))
+                return;
+
+            var child = Child.Absent;
+            if (pixels != null)
+            {
+                string path = SlicePathIn(_isoDirectory!, isoZoom, ix, iy);
+                if (!_options.Overwrite && File.Exists(path))
+                {
+                    Interlocked.Increment(ref isoExisting);
+                }
+                else
+                {
+                    ImageOutput.SaveAtomically(pixels, iso.SliceSize, iso.SliceSize, path, _format,
+                        _options.Quality, Backdrop);
+                    Interlocked.Increment(ref isoWritten);
+                }
+                child = Child.InMemory(pixels);
+            }
+
+            progress?.Tick();
+            Report(isoCascade, isoZoom, ix, iy, child);
+        }
+
+        for (int r = 0; r < rows.Count; r++)
+        {
+            // Every isometric slice this row needs and that is not in hand yet, rendered in parallel.
+            var missing = new HashSet<(int X, int Y)>();
+            foreach (var (x, y) in rows[r])
+            {
+                var (x0, y0, x1, y1) = NorthUpSampler.IsoSlicesFor(_grid, iso, northZoom, x, y);
+                for (int iy = y0; iy <= y1; iy++)
+                    for (int ix = x0; ix <= x1; ix++)
+                        if (!cache.ContainsKey((ix, iy)))
+                            missing.Add((ix, iy));
+            }
+
+            Parallel.ForEach(missing, parallelOptions, k =>
+            {
+                RenderIso(k.X, k.Y);
+                lock (reported) reported.Add(k);
+            });
+
+            // The row itself: each north-up slice sampled from the isometric slices now in hand.
+            Parallel.ForEach(rows[r], parallelOptions, slice =>
+            {
+                string path = SlicePathIn(_outputDirectory, northZoom, slice.X, slice.Y);
+                var result = Child.Absent;
+
+                if (!_options.Overwrite && File.Exists(path))
+                {
+                    Interlocked.Increment(ref skippedExisting);
+                    result = Child.OnDisk;
+                }
+                else
+                {
+                    if (!northSamplers.TryTake(out var worker))
+                        worker = new NorthUpSampler(_grid, iso);
+
+                    var pixels = new byte[size * size * 4];
+                    try
+                    {
+                        bool any = worker.Render(northZoom, slice.X, slice.Y, pixels,
+                            (ix, iy) => cache.TryGetValue((ix, iy), out var v) ? v : null);
+
+                        if (!any)
+                        {
+                            Interlocked.Increment(ref skippedEmpty);
+                        }
+                        else
+                        {
+                            ImageOutput.SaveAtomically(pixels, size, size, path, _format, _options.Quality, Backdrop);
+                            result = Child.InMemory(pixels);
+                            Interlocked.Increment(ref rendered);
+                        }
+                    }
+                    finally
+                    {
+                        northSamplers.Add(worker);
+                    }
+                }
+
+                progress?.Tick();
+                Report(northCascade, northZoom, slice.X, slice.Y, result);
+            });
+
+            // Drop the isometric slices no later row needs.
+            foreach (var key in cache.Keys)
+                if (lastRow.TryGetValue(key, out int last) && last <= r)
+                    cache.TryRemove(key, out _);
+        }
+
+        // Isometric slices the north-up rows never needed still belong to the isometric pyramid.
+        Parallel.ForEach(isoNative, parallelOptions, k =>
+        {
+            bool done;
+            lock (reported) done = reported.Contains(k);
+            if (!done)
+                RenderIso(k.X, k.Y);
+        });
+
+        log?.Invoke($"north-up level {northZoom}: {rendered} rendered, {skippedEmpty} empty, {skippedExisting} already present");
+        log?.Invoke($"isometric level {isoZoom}: {isoWritten} rendered, {isoExisting} already present");
+
+        int downsampled = 0;
+        for (int zoom = northZoom - 1; zoom >= plan.MinZoom; zoom--)
+            downsampled += northCascade.Written[zoom];
+        for (int zoom = isoZoom - 1; zoom >= isoPlan.MinZoom; zoom--)
+            downsampled += isoCascade.Written[zoom];
+
+        progress?.Advance(Math.Max(0, progress.Total - progress.Done));
+
+        stopwatch.Stop();
+        return new PyramidResult(rendered + isoWritten, downsampled, skippedEmpty,
+            skippedExisting + isoExisting, stopwatch.Elapsed);
+    }
+
+    /// <summary>
+    /// Draws one isometric slice at the deepest level, as straight-alpha RGBA, or null when nothing
+    /// is drawn there or the slice is off the facet.
+    /// </summary>
+    private byte[]? RenderIsoSlice(SliceGrid iso, int zoom, int ix, int iy, ConcurrentBag<SceneRenderer> pool)
+    {
+        if (ix < 0 || iy < 0 || ix >= iso.SlicesAcross(zoom) || iy >= iso.SlicesDown(zoom))
+            return null;
+
+        var art = _scene.Files.Art;
+        if (!iso.SliceTouchesFacet(zoom, ix, iy, _options.MinZ, _options.MaxZ, art.MaxStaticWidth, art.MaxStaticHeight))
+            return null;
+
+        if (!pool.TryTake(out var renderer))
+            renderer = new SceneRenderer(_scene, iso.SliceSize, iso.SliceSize);
+
+        try
+        {
+            var stats = renderer.Render(iso.ProjectionFor(zoom, ix, iy));
+            if (!Drew(stats))
+                return null;
+
+            var pixels = new byte[iso.SliceSize * iso.SliceSize * 4];
+            renderer.Output.CopyTo(pixels);
+            return pixels;
+        }
+        finally
+        {
+            pool.Add(renderer);
+        }
     }
 
     private static long Morton(int x, int y)
@@ -347,10 +615,16 @@ public sealed class PyramidGenerator
         public readonly (int X0, int Y0, int X1, int Y1)[] Active;
         public readonly int MinZoom;
 
-        public Cascade(PyramidPlan plan, ProgressBar? progress)
+        /// <summary>The pyramid this cascade writes, and the edge of its slices in pixels.</summary>
+        public readonly string Directory;
+        public readonly int Size;
+
+        public Cascade(PyramidPlan plan, ProgressBar? progress, string directory, int size)
         {
             Progress = progress;
             MinZoom = plan.MinZoom;
+            Directory = directory;
+            Size = size;
             Nodes = new ConcurrentDictionary<(int, int), Node>[plan.MaxZoom + 1];
             Written = new int[plan.MaxZoom + 1];
             Existing = new int[plan.MaxZoom + 1];
@@ -417,8 +691,8 @@ public sealed class PyramidGenerator
     {
         c.Progress?.Tick();
 
-        int size = _grid.SliceSize;
-        string path = SlicePath(zoom, px, py);
+        int size = c.Size;
+        string path = SlicePathIn(c.Directory, zoom, px, py);
 
         if (!_options.Overwrite && File.Exists(path))
         {
@@ -436,7 +710,7 @@ public sealed class PyramidGenerator
 
             if (data == null && slot.IsOnDisk)
             {
-                string childPath = SlicePath(zoom + 1, px * 2 + (i & 1), py * 2 + (i >> 1));
+                string childPath = SlicePathIn(c.Directory, zoom + 1, px * 2 + (i & 1), py * 2 + (i >> 1));
                 if (File.Exists(childPath))
                 {
                     data = LoadChild(childPath, out int w, out int h);
@@ -541,6 +815,9 @@ public sealed class PyramidGenerator
         _options.BackgroundColor.W >= 1f ? _options.BackgroundColor : new System.Numerics.Vector4(0, 0, 0, 1);
 
     private string SlicePath(int zoom, int x, int y) => SlicePath(zoom, x, y, _format);
+
+    private string SlicePathIn(string directory, int zoom, int x, int y) =>
+        Path.Combine(directory, zoom.ToString(), x.ToString(), $"{y}{_format.Extension}");
 
     private string SlicePath(int zoom, int x, int y, ImageFormat format) =>
         Path.Combine(_outputDirectory, zoom.ToString(), x.ToString(), $"{y}{format.Extension}");

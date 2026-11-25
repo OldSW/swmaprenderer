@@ -19,6 +19,9 @@ public static class LeafletViewer
 {
     public const string FileName = "index.html";
 
+    /// <summary>The folder, inside the map folder, that a north-up pyramid is written to.</summary>
+    public const string NorthUpFolder = "north";
+
     /// <summary>
     /// <c>index.php</c> in the repository root: answers a link with a position in it with
     /// preview tags and an image of that position, which a static page cannot do.
@@ -65,18 +68,38 @@ public static class LeafletViewer
         ImageFormat format, PointsOfInterest? embedded = null, IReadOnlyList<PoiSource>? fetched = null,
         string? templatePath = null, (int X, int Y, double? Zoom)? start = null,
         string? baseUrl = null, string? submitUrl = null,
-        IReadOnlyDictionary<string, object>? preselected = null)
+        IReadOnlyDictionary<string, object>? preselected = null, string? tileFolder = null,
+        SliceGrid? otherGrid = null)
     {
+        // The folder as it appears in a URL, with its trailing slash; null when tiles sit beside the page.
+        string? tileUrlFolder = string.IsNullOrEmpty(tileFolder) ? null : tileFolder + "/";
+
+        // Every pyramid the page can show, the one it opens on first. A north-up run also has the
+        // isometric pyramid, which is the default, with the north-up one beside it in its folder.
+        // The fields at the top of the config describe that default, as they always have.
+        var primary = otherGrid ?? grid;
+        string? primaryFolder = otherGrid != null ? null : tileUrlFolder;
+        var views = new List<object> { ViewFor(primary, primaryFolder) };
+        if (otherGrid != null)
+            views.Add(ViewFor(grid, tileUrlFolder));
+
         var config = new
         {
             mapIndex,
+            tileFolder = primaryFolder,
+            views,
             sliceSize = grid.SliceSize,
-            canvasWidth = grid.CanvasWidth,
-            canvasHeight = grid.CanvasHeight,
-            originX = grid.OriginX,
-            originY = grid.OriginY,
+            canvasWidth = primary.CanvasWidth,
+            canvasHeight = primary.CanvasHeight,
+            originX = primary.OriginX,
+            originY = primary.OriginY,
             nativeZoom = grid.NativeZoom,
             halfTile = Rendering.IsoProjection.HalfTileWidth * grid.NativeZoom,
+
+            // Whether the origin and canvas are the north-up ones, and the spacing between tile
+            // centres in canvas pixels: the page needs both to convert between the two.
+            northUp = primary.NorthUp,
+            tileStep = primary.TileStep,
 
             // The level at which one canvas unit is one image pixel. This is a property of the
             // grid, not of how deep the run went, and it is what the CRS scales against -- a
@@ -105,7 +128,7 @@ public static class LeafletViewer
         string html = template
             .Replace(ConfigPlaceholder, JsonSerializer.Serialize(config, ConfigOptions))
             .Replace(PoisPlaceholder, Markers(embedded))
-            .Replace(SocialPlaceholder, SocialTags(grid, plan, baseUrl, format.Extension, start));
+            .Replace(SocialPlaceholder, SocialTags(grid, plan, baseUrl, format.Extension, start, primaryFolder));
 
         string path = Path.Combine(outputDirectory, FileName);
         File.WriteAllText(path, html);
@@ -117,13 +140,30 @@ public static class LeafletViewer
     }
 
     /// <summary>
+    /// The geometry the page needs to show one pyramid: its canvas, where its origin sits, and the
+    /// folder its tiles are in.
+    /// </summary>
+    private static object ViewFor(SliceGrid grid, string? tileUrlFolder) => new
+    {
+        id = grid.NorthUp ? "north" : "isometric",
+        label = grid.NorthUp ? "North-up" : "Isometric",
+        northUp = grid.NorthUp,
+        tileFolder = tileUrlFolder,
+        canvasWidth = grid.CanvasWidth,
+        canvasHeight = grid.CanvasHeight,
+        originX = grid.OriginX,
+        originY = grid.OriginY,
+        tileStep = grid.TileStep,
+    };
+
+    /// <summary>
     /// Crawlers do not run scripts, so the preview has to be in the HTML itself, and Discord
     /// ignores an <c>og:image</c> that is not an absolute URL -- hence the base URL. The image is
     /// the slice holding --start at its level, or the single slice at the shallowest level
     /// (the whole facet when --min-zoom is 0) when there is no start; without a base URL the image is left out rather than written as a link that cannot work.
     /// </summary>
     private static string SocialTags(SliceGrid grid, PyramidPlan plan, string? baseUrl, string extension,
-        (int X, int Y, double? Zoom)? start)
+        (int X, int Y, double? Zoom)? start, string? tileFolder)
     {
         var tags = new List<string>
         {
@@ -151,7 +191,7 @@ public static class LeafletViewer
                 sliceY = (int)Math.Clamp((long)Math.Floor(cy / per), 0, grid.SlicesDown(level) - 1);
             }
 
-            string image = System.Net.WebUtility.HtmlEncode($"{root}{level}/{sliceX}/{sliceY}{extension}");
+            string image = System.Net.WebUtility.HtmlEncode($"{root}{tileFolder}{level}/{sliceX}/{sliceY}{extension}");
             tags.Add($"<meta property=\"og:url\" content=\"{System.Net.WebUtility.HtmlEncode(root)}\">");
             tags.Add($"<meta property=\"og:image\" content=\"{image}\">");
         }

@@ -63,6 +63,12 @@ public sealed class RenderOptions
     /// <summary>Flatten every tile to z=0, as CentrED's flat view does.</summary>
     public bool FlatView { get; set; }
 
+    /// <summary>
+    /// Cut the pyramid from a north-up canvas instead of the client's isometric one. Sprites are
+    /// resampled with the tiles, so they stand at 45 degrees. Only meaningful with --tiles.
+    /// </summary>
+    public bool NorthUp { get; set; }
+
     /// <summary>Use terrain textures even where unstretched land art would do.</summary>
     public bool PreferTexmaps { get; set; }
 
@@ -451,6 +457,10 @@ public sealed class RenderOptions
 
         if (Region != null && ParseRegion(Region) == null)
             errors.Add($"Region '{Region}' is not four comma-separated tile coordinates, e.g. 1350,1600,1500,1750.");
+
+        if (NorthUp && !IsTiling)
+            errors.Add("NorthUp (--north-up) only applies to a pyramid, so it needs --tiles.");
+
 
         if (SliceTiles is < 1 or > 256)
             errors.Add($"SliceTiles must be between 1 and 256 (got {SliceTiles}).");

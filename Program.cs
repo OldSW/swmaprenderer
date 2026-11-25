@@ -137,10 +137,20 @@ static int RunTiling(MapScene scene, RenderOptions options)
     var files = scene.Files;
     var grid = new SliceGrid(
         files.Dimensions, options.SliceTiles, options.Zoom,
-        files.Art.MaxStaticWidth, files.Art.MaxStaticHeight);
+        files.Art.MaxStaticWidth, files.Art.MaxStaticHeight, options.NorthUp);
 
     string directory = Path.GetFullPath(options.Tiles!);
-    var generator = new PyramidGenerator(scene, grid, directory);
+
+    // A north-up pyramid sits in its own folder beside the isometric one, which may already be
+    // there and must not be skipped or mixed with it. The page itself stays in the map folder.
+    string tileDirectory = options.NorthUp ? Path.Combine(directory, LeafletViewer.NorthUpFolder) : directory;
+    // A north-up run also writes the isometric pyramid, from the same renders. Its grid is the
+    // isometric one over the same facet.
+    var isoGrid = options.NorthUp
+        ? new SliceGrid(files.Dimensions, options.SliceTiles, options.Zoom,
+            files.Art.MaxStaticWidth, files.Art.MaxStaticHeight)
+        : null;
+    var generator = new PyramidGenerator(scene, grid, tileDirectory, isoGrid, options.NorthUp ? directory : null);
     var plan = generator.Plan();
 
     var format = options.ResolvedFormat;
@@ -160,6 +170,8 @@ static int RunTiling(MapScene scene, RenderOptions options)
                       (format.IsLossy ? $" at quality {options.Quality}" : " (lossless)"));
     Console.WriteLine($"Canvas      : {grid.CanvasWidth}x{grid.CanvasHeight} px at {options.Zoom:0.##}x " +
                       $"({grid.SliceSize}px slices of {grid.TilesPerSlice}x{grid.TilesPerSlice} tiles)");
+    if (grid.NorthUp)
+        Console.WriteLine("Projection  : north-up (resampled from the isometric view, sprites tilted)");
     Console.WriteLine($"Region      : tiles {plan.Region.X0},{plan.Region.Y0} .. {plan.Region.X1},{plan.Region.Y1}");
     Console.WriteLine($"Levels      : {plan.MinZoom}..{plan.MaxZoom} of 0..{grid.MaxZoom} " +
                       $"(level {plan.MaxZoom} is {grid.TilePixelsAtLevel(plan.MaxZoom):0.##}px per tile)");
@@ -201,7 +213,7 @@ static int RunTiling(MapScene scene, RenderOptions options)
 
     if (generator.DetectForeignFormat(plan) is { } foreign)
     {
-        Warn($"{directory} already holds {foreign.Name} slices. A resume only looks for " +
+        Warn($"{tileDirectory} already holds {foreign.Name} slices. A resume only looks for " +
              $"{format.Name}, so this run would render everything again and leave both formats " +
              $"side by side. Delete the directory, or pass --format {foreign.Name}.");
     }
@@ -213,7 +225,7 @@ static int RunTiling(MapScene scene, RenderOptions options)
         return 0;
     }
 
-    Directory.CreateDirectory(directory);
+    Directory.CreateDirectory(tileDirectory);
 
     // --verbose already narrates progress line by line, and a bar redrawn between those lines
     // would be overwritten by them. Without a terminal the bar logs a line per 10% instead.
@@ -230,7 +242,7 @@ static int RunTiling(MapScene scene, RenderOptions options)
 
     string page = LeafletViewer.Write(grid, plan, options.Map, directory, options.ResolvedFormat,
         pois, fetched, options.Template, options.ParsedStart, options.BaseUrl, options.SubmitUrl,
-        options.ResolvePreselected());
+        options.ResolvePreselected(), options.NorthUp ? LeafletViewer.NorthUpFolder : null, isoGrid);
 
     Console.WriteLine();
     Console.WriteLine($"Rendered {result.Rendered:N0} slices, downsampled {result.Downsampled:N0}, " +

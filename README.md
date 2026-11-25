@@ -155,6 +155,39 @@ smaller zoom: it costs a third as much again instead of doubling, and averaging 
 antialiases art that rendering small would merely alias. The averaging is done on premultiplied
 alpha, or transparent pixels would drag their colour into every sprite edge.
 
+### North-up pyramids
+
+`--north-up` writes a north-up pyramid alongside the isometric one, from the same renders. The
+isometric pyramid goes to the `--tiles` directory as usual. The north-up pyramid goes to a `north`
+folder inside it, and the page in the `--tiles` directory opens on the isometric pyramid, as before. Its compass
+button switches the page to the north-up pyramid and back, keeping the place and zoom you are at.
+
+The grid is turned 45 degrees, so the tiles are axis-aligned and north is at the top. Terrain and
+roofs end up square to the screen. The art itself is not turned: a tree is still an upright sprite
+in the client, so in the north-up pyramid it stands at 45 degrees. That is accepted. A second
+projection that keeps sprites upright would need every slice re-rendered with different geometry,
+and is not what this option is for.
+
+Each isometric slice is rendered once and kept in memory until the north-up slices that use it are
+built. The north-up slices are built a row at a time, so only the strip of isometric slices a row
+needs is held at once. Each north-up pixel is bilinearly sampled from those isometric pixels, on
+premultiplied colour. Neither pyramid is read back from a file, so no lossy encoding comes in
+between. The cost is roughly that of the isometric run, plus the sampling and the extra encoding of
+the north-up slices.
+
+Slices still agree along their edges. Each north-up slice samples the isometric canvas at fixed
+whole-pixel positions, so two slices that share an edge sample the same pixels. This was checked
+the same way as the isometric pyramid: a small region and a larger one that contains it produce
+byte-identical slices wherever they overlap. The north-up output was also checked against the
+earlier method, which rendered each window directly, and matched it byte for byte at every level.
+
+The north-up pyramid has the same levels as the isometric one, so `--max-zoom` applies to both. The
+isometric slices are rendered at the deepest level in use, and the north-up slices are sampled from
+those, exactly as the isometric pyramid's own deepest level is rendered.
+
+The viewer does not turn the map in this mode. The compass switches between the two pyramids. A page
+with only one pyramid, the isometric one, keeps the compass that turns the map to north.
+
 ### The viewer
 
 `index.html` uses a custom CRS whose units are canvas pixels at the grid's deepest level, so
@@ -866,6 +899,7 @@ the `SWMAP_Render__` environment variables.
 | `--min-z`, `--max-z` | Restrict the z range |
 | `-v, --verbose` | Report the view range, tile counts and timings |
 | `--tiles <dir>` | Write a browsable tile pyramid here instead of one image |
+| `--north-up` | With `--tiles`: cut the pyramid north-up, tilting sprites with the terrain |
 | `--slice-tiles <n>` | Tiles per slice edge (default 16, giving 704px slices) |
 | `--region <x1,y1,x2,y2>` | Cover only this tile rectangle |
 | `--min-zoom`, `--max-zoom` | Pyramid levels to write (`--max-zoom` sets the depth; `--zoom` sets the detail) |
